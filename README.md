@@ -5,6 +5,7 @@ A generative model that synthesizes $28 \times 28$ images by predicting the velo
 This project explores the boundary between local patch-based training and global structural coherence using **Flow Matching**.
 
 <img src="samples.png" alt="Generated MNIST Samples" width="300px"/>
+<img src="samples2.png" alt="Generated MNIST Samples" width="300px"/>
 
 
 ## 🧠 The Concept
