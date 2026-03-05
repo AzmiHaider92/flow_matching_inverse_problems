@@ -20,26 +20,33 @@ os.makedirs(output_dir, exist_ok=True)
 image_size = 28
 
 
-# --- 3x3 Visualization Function ---
 @torch.no_grad()
 def visualize_grid(model, epoch, num_classes, steps=25, PATCH_SIZE=7, device='cpu'):
     model.eval()
-    grid_res = image_size // PATCH_SIZE
     fig, axes = plt.subplots(3, 3, figsize=(8, 8))
 
+    # We use a stride smaller than the patch size to create overlap
+    stride = 2
+
     for idx in range(9):
-        # Sample a random class from the available range
         label_val = torch.randint(0, num_classes, (1,)).to(device)
-        full_img = torch.zeros((image_size, image_size)).to(device)
 
-        for i in range(grid_res):
-            for j in range(grid_res):
-                y, x = i * PATCH_SIZE, j * PATCH_SIZE
-                # Normalized coordinates
-                coords = torch.tensor([[x / (image_size - PATCH_SIZE),
-                                        y / (image_size - PATCH_SIZE)]]).to(device).float()
+        # We need two buffers: one for the pixel values, one to count contributions
+        canvas = torch.zeros((image_size, image_size)).to(device)
+        counts = torch.zeros((image_size, image_size)).to(device)
 
-                # ODE Solve (Euler)
+        # Create a 2D Gaussian mask to weight the center of patches higher than edges
+        # This makes seams almost invisible
+        y, x = torch.meshgrid(torch.linspace(-1, 1, PATCH_SIZE), torch.linspace(-1, 1, PATCH_SIZE), indexing='ij')
+        mask = torch.exp(-(x ** 2 + y ** 2) / 0.5).to(device)
+
+        # Slide across the image
+        for y_start in range(0, image_size - PATCH_SIZE + 1, stride):
+            for x_start in range(0, image_size - PATCH_SIZE + 1, stride):
+                coords = torch.tensor([[x_start / (image_size - PATCH_SIZE),
+                                        y_start / (image_size - PATCH_SIZE)]]).to(device).float()
+
+                # Inference: ODE Solve
                 xt = torch.randn(1, PATCH_SIZE ** 2).to(device)
                 dt = 1.0 / steps
                 for s in range(steps):
@@ -47,7 +54,14 @@ def visualize_grid(model, epoch, num_classes, steps=25, PATCH_SIZE=7, device='cp
                     vt = model(xt, t, coords, label_val)
                     xt = xt + vt * dt
 
-                full_img[y:y + PATCH_SIZE, x:x + PATCH_SIZE] = xt.view(PATCH_SIZE, PATCH_SIZE)
+                patch = xt.view(PATCH_SIZE, PATCH_SIZE) * mask
+
+                # Accumulate
+                canvas[y_start:y_start + PATCH_SIZE, x_start:x_start + PATCH_SIZE] += patch
+                counts[y_start:y_start + PATCH_SIZE, x_start:x_start + PATCH_SIZE] += mask
+
+        # Average the results to get the smooth image
+        full_img = canvas / (counts + 1e-8)
 
         ax = axes[idx // 3, idx % 3]
         ax.imshow(full_img.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
@@ -56,7 +70,6 @@ def visualize_grid(model, epoch, num_classes, steps=25, PATCH_SIZE=7, device='cp
 
     plt.tight_layout()
     save_path = os.path.join(output_dir, f"epoch_{epoch:03d}.png")
-    print(f"Saved at: {exp_name}")
     plt.savefig(save_path)
     plt.close()
 
