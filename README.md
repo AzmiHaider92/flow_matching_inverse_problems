@@ -4,8 +4,9 @@ A generative model that synthesizes $28 \times 28$ images by predicting the velo
 
 This project explores the boundary between local patch-based training and global structural coherence using **Flow Matching**.
 
-<img src="patching.png" alt="Patching" width="400px"/>
-
+<p align="center">
+  <img src="patching.png" alt="Patching" width="600px"/>
+</p>
 ## 🧠 The Concept
 
 Unlike standard generative models that process the entire image at once, **PatchFlow** treats an image as a collection of independent patches. 
