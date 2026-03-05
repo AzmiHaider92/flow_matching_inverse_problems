@@ -116,7 +116,6 @@ if __name__ == "__main__":
         print(f"Evaluation image saved to: {os.path.join(run_dir, out_name)}")
 
     # --- TRAINING MODE ---
-    # --- TRAINING MODE ---
     else:
         optimizer = optim.Adam(model.parameters(), lr=config.lr)
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.n_epochs, eta_min=config.lr * 0.1)
@@ -141,8 +140,8 @@ if __name__ == "__main__":
                 vt = model(xt, t, coords, labels)
                 loss = torch.mean((vt - ut) ** 2)
 
-                optimizer.zero_grad();
-                loss.backward();
+                optimizer.zero_grad()
+                loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
 
@@ -158,3 +157,5 @@ if __name__ == "__main__":
                 # Save Checkpoint
                 ckpt_path = os.path.join(run_dir, "last_model.pt")
                 torch.save(model.state_dict(), ckpt_path)
+
+        print(f"Results saved to: {run_dir}")
