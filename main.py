@@ -12,10 +12,7 @@ from data import EMNIST
 from model import PatchFlowModel
 
 # --- Setup Experiment Directory ---
-timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-exp_name = f"experiment_mnist__{timestamp}"
-output_dir = os.path.join("outputs", exp_name)
-os.makedirs(output_dir, exist_ok=True)
+
 
 image_size = 28
 
@@ -91,6 +88,10 @@ def get_args():
 if __name__ == "__main__":
     config = get_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    exp_name = f"experiment_mnist_patch{config.patch_size}_{timestamp}"
+    output_dir = os.path.join("outputs", exp_name)
+    os.makedirs(output_dir, exist_ok=True)
 
     # 1. Setup Data
     dataset = EMNIST(train=True, class_range=config.class_range, device=device)
@@ -151,7 +152,7 @@ if __name__ == "__main__":
             total_loss += loss.item()
 
         avg_loss = total_loss / len(loader)
-        scheduler.step(avg_loss)
+        scheduler.step()
 
         print(f"Epoch {epoch + 1:03d} | Loss: {avg_loss:.6f} | LR: {optimizer.param_groups[0]['lr']:.2e}")
 
