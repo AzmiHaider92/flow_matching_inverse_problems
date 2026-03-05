@@ -111,7 +111,7 @@ if __name__ == "__main__":
     if config.mode == 'eval':
         print("Running Evaluation...")
         # Add a unique suffix so we don't overwrite training images
-        timestamp_eval = datetime.now().strftime("%H%M%S")
+        timestamp_eval = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         out_name = f"eval_overlap_{config.overlap}_{timestamp_eval}.png"
 
         visualize_grid(model, 0, dataset.num_classes, os.path.join(run_dir, out_name),

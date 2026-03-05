@@ -19,5 +19,13 @@ class EMNIST(tvds.EMNIST):
         self.data = self.data[idxs]
         self.targets = self.targets[idxs]
 
-    def __getitem__(self, idx):
-        return self.data[idx], self.targets[idx]
+    def __getitem__(self, index):
+        img, label = self.data[index], self.targets[index]
+
+        # Ensure image is a float tensor in [0, 1]
+        img = img.float() / 255.0 if img.dtype == torch.uint8 else img
+
+        # Shift to [-1, 1]
+        img = img * 2.0 - 1.0
+
+        return img, label
