@@ -7,6 +7,8 @@ This project explores the boundary between local patch-based training and global
 <p align="center">
   <img src="patching.png" alt="Patching" width="600px"/>
 </p>
+
+
 ## 🧠 The Concept
 
 Unlike standard generative models that process the entire image at once, **PatchFlow** treats an image as a collection of independent patches. 
