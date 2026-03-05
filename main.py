@@ -69,6 +69,7 @@ def get_args():
     parser.add_argument('--mode', type=str, choices=['train', 'eval'], default='train')
     parser.add_argument('--ckpt_path', type=str, default=None, help="Path to load weights for eval or resume")
     parser.add_argument('--n_epochs', type=int, default=500)
+    parser.add_argument('--vis_every', type=int, default=50)
     parser.add_argument('--patch_size', type=int, default=7)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--lr', type=float, default=5e-4)
@@ -148,7 +149,7 @@ if __name__ == "__main__":
             scheduler.step()
             print(f"Epoch {epoch + 1} | Loss: {total_loss / len(loader):.6f}")
 
-            if (epoch + 1) % 10 == 0:
+            if (epoch + 1) % config.vis_every == 0:
                 # Save Visualization
                 img_path = os.path.join(run_dir, f"epoch_{epoch + 1:03d}.png")
                 visualize_grid(model, epoch + 1, dataset.num_classes, img_path,
