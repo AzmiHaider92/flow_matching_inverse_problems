@@ -4,7 +4,7 @@ A generative model that synthesizes $28 \times 28$ images by predicting the velo
 
 This project explores the boundary between local patch-based training and global structural coherence using **Flow Matching**.
 
-<img src="samples.png" alt="Samples 1" width="49%"/> <img src="samples2.png" alt="Samples 2" width="49%"/>
+<img src="patching.png" alt="Patching" width="400px"/>
 
 ## 🧠 The Concept
 
@@ -50,5 +50,7 @@ python main.py --mode eval --ckpt_path path/to/last_model.pt --overlap --fm_step
 | **ODE Solver** | Euler (64 steps) |
 
 
+## Samples
 
+<img src="samples.png" alt="Samples 1" width="49%"/> <img src="samples2.png" alt="Samples 2" width="49%"/>
 
