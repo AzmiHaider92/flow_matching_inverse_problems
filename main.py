@@ -74,12 +74,15 @@ def visualize_grid(model, epoch, num_classes, steps=25, PATCH_SIZE=7, device='cp
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_epochs', type=int, default=100)
-    parser.add_argument('--patch_size', type=int, default=7)
     parser.add_argument('--batch_size', type=int, default=128)
-    parser.add_argument('--vis_every', type=int, default=25)
+    parser.add_argument('--vis_every', type=int, default=50)
+
+    # model configs
+    parser.add_argument('--patch_size', type=int, default=7)
+    parser.add_argument('--cond_dim', type=int, default=512)
 
     parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--fm_steps', type=int, default=25)
+    parser.add_argument('--fm_steps', type=int, default=100)
     parser.add_argument('--class_range', type=int, nargs='*', default=[0, 10])
     return parser.parse_args()
 
@@ -98,7 +101,7 @@ if __name__ == "__main__":
     loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True)
 
     # 2. Setup Model & Optimizer
-    model = PatchFlowModel(patch_size=config.patch_size, num_classes=dataset.num_classes).to(device)
+    model = PatchFlowModel(patch_size=config.patch_size, cond_dim=config.cond_dim, num_classes=dataset.num_classes).to(device)
     optimizer = optim.Adam(model.parameters(), lr=config.lr)
 
     # 3. Slow Cosine Decay to 10% (0.1) of initial LR

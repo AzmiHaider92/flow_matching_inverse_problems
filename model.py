@@ -7,7 +7,7 @@ import numpy as np
 
 
 class FourierEmbedding(nn.Module):
-    def __init__(self, in_channels, out_channels, scale=10.0):
+    def __init__(self, in_channels, out_channels, scale=20.0):
         super().__init__()
         # Fixed random frequencies to project low-dim input to high-dim
         self.register_buffer('B', torch.randn(in_channels, out_channels // 2) * scale)
@@ -19,7 +19,7 @@ class FourierEmbedding(nn.Module):
 
 
 class PatchFlowModel(nn.Module):
-    def __init__(self, patch_size=7, cond_dim=256, num_classes=10):
+    def __init__(self, patch_size=7, cond_dim=512, num_classes=10):
         super().__init__()
         self.patch_dim = patch_size * patch_size
 
