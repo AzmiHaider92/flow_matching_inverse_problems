@@ -79,6 +79,8 @@ def get_args():
     parser.add_argument('--n_epochs', type=int, default=100)
     parser.add_argument('--patch_size', type=int, default=7)
     parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--vis_every', type=int, default=25)
+
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--fm_steps', type=int, default=25)
     parser.add_argument('--class_range', type=int, nargs='*', default=[0, 10])
@@ -98,9 +100,13 @@ if __name__ == "__main__":
     model = PatchFlowModel(patch_size=config.patch_size, num_classes=dataset.num_classes).to(device)
     optimizer = optim.Adam(model.parameters(), lr=config.lr)
 
-    # Adding a scheduler to drop LR by half if loss doesn't improve for 5 epochs
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
-
+    # 3. Slow Cosine Decay to 10% (0.1) of initial LR
+    # T_max is the total number of steps/epochs to reach the minimum
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=config.n_epochs,
+        eta_min=config.lr * 0.1
+    )
     print(f"Starting Training on {device}...")
     print(f"Results will be saved to: {output_dir}")
 
@@ -150,5 +156,7 @@ if __name__ == "__main__":
         print(f"Epoch {epoch + 1:03d} | Loss: {avg_loss:.6f} | LR: {optimizer.param_groups[0]['lr']:.2e}")
 
         # Visualize periodically
-        if (epoch + 1) % 10 == 0 or epoch == 0:
+        if (epoch + 1) % config.vis_every == 0 or epoch == 0:
             visualize_grid(model, epoch + 1, dataset.num_classes, config.fm_steps, config.patch_size, device)
+
+    print(f"Results saved to: {output_dir}")
