@@ -9,7 +9,7 @@ This project explores the boundary between local patch-based training and global
 </p>
 
 
-## 🧠 The Concept
+## Method
 
 Unlike standard generative models that process the entire image at once, **PatchFlow** treats an image as a collection of independent patches. 
 
@@ -18,7 +18,7 @@ The model learns a vector field $v(x, t)$ that pushes random noise toward a data
 1. **Spatial "GPS" (Fourier Features):** High-frequency sinusoidal embeddings of $(x, y)$ coordinates that allow the model to know exactly where a patch sits on the canvas.
 2. **Global Class Signal:** A shared class embedding that ensures all patches are "sculpting" the same digit simultaneously.
 
-## 🚀 Key Features
+## Features
 
 * **Flow Matching API:** Implements linear probability paths for efficient generative modeling.
 * **Coordinate-Aware MLP:** Uses Random Fourier Features with a scale of 20.0 to capture sharp edge details.
@@ -27,7 +27,7 @@ The model learns a vector field $v(x, t)$ that pushes random noise toward a data
   * **Gaussian Blending:** Weighted averaging of overlapping patches to eliminate grid-boundary artifacts.
   * **Range Normalization:** Optimized for $[-1, 1]$ pixel space for symmetric gradient flow.
 
-## 🛠 Usage
+## Usage
 
 ### Training
 To start training from scratch:
@@ -41,7 +41,7 @@ To generate a grid of samples from a specific checkpoint:
 python main.py --mode eval --ckpt_path path/to/last_model.pt --overlap --fm_steps 64
 ```
 
-## 📊 Technical Specifications
+## Specifications
 
 | Parameter | Value |
 | :--- | :--- |
