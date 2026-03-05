@@ -5,7 +5,7 @@ A generative model that synthesizes $28 \times 28$ images by predicting the velo
 This project explores the boundary between local patch-based training and global structural coherence using **Flow Matching**.
 
 <p align="center">
-  <img src="patching.png" alt="Patching" width="600px"/>
+  <img src="patching.png" alt="Patching" width="500px"/>
 </p>
 
 
