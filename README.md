@@ -22,3 +22,12 @@ Goal: Generate a "full" pseudo-image $\hat{X}$ that is consistent with the obser
    - Step Toward Data: Move the current state toward the clean manifold: $X_{t-\Delta t} = X_t - \Delta t \cdot v$
    - Apply Manifold Guidance (The GPS): Correct the trajectory so the cropped region matches the real observation $y$ using the gradient of the forward loss: $X_{t-\Delta t} = X_{t-\Delta t} - \eta \nabla_{X} \|f(X_{t-\Delta t}) - y\|^2_2$ (Where $\eta$ is the guidance scale/step size).
 3. Final Result: At $t=0$, we obtain a reconstructed candidate $\hat{X}$ that satisfies the physical constraint $f(\hat{X}) \approx y$.
+
+### Phase 2: Flow Matching (The "M-Step")
+
+Goal: Update the model $v_\theta$ to treat the generated $\hat{X}$ as the new ground truth.
+1. Sample Time: Select a random timestep $t \in [0, 1]$.
+2. Construct Noisy State ($X_t$): Create an interpolation between the reconstructed image $\hat{X}$ and a new noise sample $X_1$: $X_t = (1-t)\hat{X} + t X_1$
+3. Define Target Velocity: The ideal vector $u$ that maps the noise back to the image is: $u = X_1 - \hat{X}$
+4. Optimize: Update the weights of the velocity network $v_\theta$ by minimizing the Flow Matching objective: $\mathcal{L} = \|v_\theta(X_t, t) - u\|^2_2$
+
