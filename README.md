@@ -35,7 +35,8 @@ Goal: Update the model $v_\theta$ to treat the generated $\hat{X}$ as the new gr
    <p align="center">$X_t = (1-t)\hat{X} + t X_1$</p>
 3. Define Target Velocity: The ideal vector $u$ that maps the noise back to the image is: <br>
 <p align="center">$u = X_1 - \hat{X}$</p>
-4. Optimize: Update the weights of the velocity network $v_\theta$ by minimizing the Flow Matching objective: $\mathcal{L} = \|v_\theta(X_t, t) - u\|^2_2$
+4. Optimize: Update the weights of the velocity network $v_\theta$ by minimizing the Flow Matching objective: <br>
+<p align="center">$\mathcal{L} = \|v_\theta(X_t, t) - u\|^2_2$</p>
 
 
 
