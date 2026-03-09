@@ -26,7 +26,7 @@ Goal: Generate a "full" pseudo-image $\hat{X}$ that is consistent with the obser
    - Apply Manifold Guidance (The GPS): Correct the trajectory so the cropped region matches the real observation $y$ using the gradient of the forward loss: <br>
    <p align="center">$X_{t-\Delta t} = X_{t-\Delta t} - \eta \nabla_{X} \|f(X_{t-\Delta t}) - y\|^2_2$</p>  <br>
    (Where $\eta$ is the guidance scale/step size).
-3. Final Result: At $t=0$, we obtain a reconstructed candidate $\hat{X}$ that satisfies the physical constraint $f(\hat{X}) \approx y$.
+4. Final Result: At $t=0$, we obtain a reconstructed candidate $\hat{X}$ that satisfies the physical constraint $f(\hat{X}) \approx y$.
 
 ### Phase 2: Flow Matching (The "M-Step")
 
