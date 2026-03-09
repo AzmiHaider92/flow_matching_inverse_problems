@@ -31,3 +31,8 @@ Goal: Update the model $v_\theta$ to treat the generated $\hat{X}$ as the new gr
 3. Define Target Velocity: The ideal vector $u$ that maps the noise back to the image is: $u = X_1 - \hat{X}$
 4. Optimize: Update the weights of the velocity network $v_\theta$ by minimizing the Flow Matching objective: $\mathcal{L} = \|v_\theta(X_t, t) - u\|^2_2$
 
+
+---
+
+By repeating these two phases, the model experiences a "self-correction" loop.In the beginning, the Guidance does the heavy lifting, forcing the noise to at least contain the correct crop $y$. Over many iterations, the Flow Matching model learns the common patterns across all various crops in the dataset, eventually recovering the full global prior $P(X)$ without ever seeing a complete original image.
+
