@@ -20,5 +20,5 @@ Goal: Generate a "full" pseudo-image $\hat{X}$ that is consistent with the obser
 2. Solve the ODE (Backwards $t=1 \to t=0$): For each discrete timestep $t$ in the ODE trajectory:
    - Predict Velocity: Compute the current velocity using the model: $v = v_\theta(X_t, t)$.
    - Step Toward Data: Move the current state toward the clean manifold: $X_{t-\Delta t} = X_t - \Delta t \cdot v$
-   - Apply Manifold Guidance (The GPS): Correct the trajectory so the cropped region matches the real observation $y$ using the gradient of the forward loss:$$X_{t-\Delta t} = X_{t-\Delta t} - \eta \nabla_{X} \|f(X_{t-\Delta t}) - y\|^2_2$$ (Where $\eta$ is the guidance scale/step size).
+   - Apply Manifold Guidance (The GPS): Correct the trajectory so the cropped region matches the real observation $y$ using the gradient of the forward loss: $X_{t-\Delta t} = X_{t-\Delta t} - \eta \nabla_{X} \|f(X_{t-\Delta t}) - y\|^2_2$ (Where $\eta$ is the guidance scale/step size).
 3. Final Result: At $t=0$, we obtain a reconstructed candidate $\hat{X}$ that satisfies the physical constraint $f(\hat{X}) \approx y$.
