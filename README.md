@@ -17,7 +17,7 @@ The algorithm alternates between a Sampling Phase (Inference) and a Learning Pha
 ### Phase 1: Guided Sampling (The "E-Step")
 Goal: Generate a "full" pseudo-image $\hat{X}$ that is consistent with the observed crop $y$.
 1. Initialize: Start with a latent state of pure Gaussian noise $X_1 \sim \mathcal{N}(0, I)$.
-2. Solve the ODE (Backwards $t=1 \to t=0$):
+2. Solve the ODE (Backwards $t=1 \to t=0$): <br>
    For each discrete timestep $t$ in the ODE trajectory:
    - Predict Velocity: Compute the current velocity using the model: <br>
    <p align="center">$v = v_\theta(X_t, t)$</p>
