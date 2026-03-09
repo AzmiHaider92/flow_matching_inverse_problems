@@ -1,59 +1,24 @@
-# PatchFlow: Coordinate-Conditioned Patch Flow Matching
+# Iterative Guided Flow Matching for Inverse Problems
 
-A generative model that synthesizes $28 \times 28$ images by predicting the velocity of local $7 \times 7$ patches. 
-
-This project explores the boundary between local patch-based training and global structural coherence using **Flow Matching**.
+This repository implements a Stochastic Expectation-Maximization (SEM) framework for learning a generative prior $P(X)$ from incomplete observations $Y$.
 
 <p align="center">
   <img src="patching.png" alt="Patching" width="500px"/>
 </p>
 
 
-## Method
+## Overview
 
-Unlike standard generative models that process the entire image at once, **PatchFlow** treats an image as a collection of independent patches. 
+The goal is to learn the distribution of a high-dimensional signal $X$ (e.g., a full image) when we only have access to a degraded or partial measurement $Y = f(X)$ (e.g., a crop, a projection, or a blurred image). Since we never observe the ground-truth $X$, the model learns by iteratively "hallucinating" reconstructions and then training on those "hallucinations."
 
-The model learns a vector field $v(x, t)$ that pushes random noise toward a data distribution. To ensure that 16 (or more) independent patches can "stitch" together to form a coherent digit, we use two critical synchronization signals:
+## The Training Loop
 
-1. **Spatial "GPS" (Fourier Features):** High-frequency sinusoidal embeddings of $(x, y)$ coordinates that allow the model to know exactly where a patch sits on the canvas.
-2. **Global Class Signal:** A shared class embedding that ensures all patches are "sculpting" the same digit simultaneously.
-
-## Features
-
-* **Flow Matching API:** Implements linear probability paths for efficient generative modeling.
-* **Coordinate-Aware MLP:** Uses Random Fourier Features with a scale of 20.0 to capture sharp edge details.
-* **ResNet Backbone:** Deep MLP with residual connections and SiLU activations to map complex vector fields.
-* **Seamless Inference:** * **Global Noise Mapping:** Shared $x_0$ noise across overlapping patches to ensure structural harmony.
-  * **Gaussian Blending:** Weighted averaging of overlapping patches to eliminate grid-boundary artifacts.
-  * **Range Normalization:** Optimized for $[-1, 1]$ pixel space for symmetric gradient flow.
-
-## Usage
-
-### Training
-To start training from scratch:
-```bash
-python main.py --mode train --n_epochs 1500 --patch_size 7 --lr 5e-4 --overlap
-```
-
-### Inference / Evaluation
-To generate a grid of samples from a specific checkpoint:
-```bash
-python main.py --mode eval --ckpt_path path/to/last_model.pt --overlap --fm_steps 64
-```
-
-## Specifications
-
-| Parameter | Value |
-| :--- | :--- |
-| **Patch Size** | 7x7 |
-| **Coordinate Embedding** | Fourier (Scale: 20.0) |
-| **Activation** | SiLU (Swish) |
-| **Pixel Range** | [-1, 1] |
-| **Inference Stride** | 2 (with overlap) |
-| **ODE Solver** | Euler (64 steps) |
-
-
-## Samples
-
-<img src="samples.png" alt="Samples 1" width="49%"/> <img src="samples2.png" alt="Samples 2" width="49%"/>
-
+The algorithm alternates between a Sampling Phase (Inference) and a Learning Phase (Optimization).
+### Phase 1: Guided Sampling (The "E-Step")
+Goal: Generate a "full" pseudo-image $\hat{X}$ that is consistent with the observed crop $y$.
+1. Initialize: Start with a latent state of pure Gaussian noise $X_1 \sim \mathcal{N}(0, I)$.
+2. Solve the ODE (Backwards $t=1 \to t=0$): For each discrete timestep $t$ in the ODE trajectory:
+   - Predict Velocity: Compute the current velocity using the model: $v = v_\theta(X_t, t)$.
+   - Step Toward Data: Move the current state toward the clean manifold:$$X_{t-\Delta t} = X_t - \Delta t \cdot v$$
+   - Apply Manifold Guidance (The GPS): Correct the trajectory so the cropped region matches the real observation $y$ using the gradient of the forward loss:$$X_{t-\Delta t} = X_{t-\Delta t} - \eta \nabla_{X} \|f(X_{t-\Delta t}) - y\|^2_2$$(Where $\eta$ is the guidance scale/step size).
+3. Final Result: At $t=0$, we obtain a reconstructed candidate $\hat{X}$ that satisfies the physical constraint $f(\hat{X}) \approx y$.
