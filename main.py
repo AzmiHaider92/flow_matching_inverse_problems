@@ -75,19 +75,12 @@ def visualize_grid(model, loader, output_path, steps=25, patch_size=7, device='c
     plt.close()
 
 
-def f_project(X, config):
-    """
-    X: Full image [B, 1, 28, 28]
-    Returns: The patch [B, patch_size*patch_size]
-    """
+def f_project(X, y_idx, x_idx, patch_size):
     B = X.shape[0]
-    max_off = image_size - config.patch_size
-    x_idx = torch.randint(0, max_off + 1, (B,))
-    y_idx = torch.randint(0, max_off + 1, (B,))
-
     patches = []
     for i in range(B):
-        patch = X[i, 0, y_idx[i]:y_idx[i] + config.patch_size, x_idx[i]:x_idx[i] + config.patch_size]
+        # Use the passed-in indices instead of random ones
+        patch = X[i, 0, y_idx[i]:y_idx[i] + patch_size, x_idx[i]:x_idx[i] + patch_size]
         patches.append(patch.reshape(-1))
     return torch.stack(patches)
 
@@ -163,39 +156,31 @@ if __name__ == "__main__":
                 B = images.shape[0]
                 images, labels = images.to(device), labels.to(device)
 
-                # 1. Prepare the Observation (y)
-                y_obs = f_project(images, config) # [B, patch_size*patch_size]
+                # --- FIX: Sample indices ONCE here ---
+                max_off = image_size - config.patch_size
+                x_idx = torch.randint(0, max_off + 1, (B,), device=device)
+                y_idx = torch.randint(0, max_off + 1, (B,), device=device)
+
+                # Use these fixed indices for both real and hallucinated projections
+                y_obs = f_project(images, y_idx, x_idx, config.patch_size)
 
                 # --- PHASE 1: GUIDED SAMPLING ---
                 model.eval()
                 with torch.no_grad():
-                    # Start with a full-size noise canvas X [B, 1, 28, 28]
                     x_hat = torch.randn(B, 1, image_size, image_size).to(device)
                     dt = 1.0 / config.guide_steps
 
                     for s in range(config.guide_steps):
                         t_curr = torch.ones(B, 1).to(device) * (1.0 - s * dt)
-
-                        # 1. Prior Step: What does the model think the FULL image looks like?
-                        # Note: If your model is patch-based, you'd apply it across the image here
                         vt = model(x_hat, t_curr, labels)
                         x_hat = x_hat - vt * dt
 
-                        # 2. Guidance Step: The GPS
-                        # Force the part of x_hat at (y_idx, x_idx) to match the real y_obs
                         with torch.enable_grad():
                             x_hat.requires_grad_(True)
-                            # We project the hallucinated FULL image down to the patch
-                            prediction_y = f_project(x_hat, config)
-
-                            # Loss is only calculated on the observable part (the patch)
+                            # Pass the SAME indices here
+                            prediction_y = f_project(x_hat, y_idx, x_idx, config.patch_size)
                             guidance_loss = torch.sum((prediction_y - y_obs) ** 2)
-
-                            # Gradient is backpropagated to the FULL image x_hat
                             grad = torch.autograd.grad(guidance_loss, x_hat)[0]
-
-                            # Nudge the FULL image. Only the pixels in the patch area
-                            # will have non-zero gradients!
                             x_hat = x_hat.detach() - config.eta * grad
 
                 # --- PHASE 2: FLOW MATCHING (The "Study") ---
