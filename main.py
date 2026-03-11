@@ -218,7 +218,11 @@ if __name__ == "__main__":
                 optimizer.step()
                 total_loss += loss.item()
 
-            print(f"Epoch {epoch + 1} | Loss: {total_loss / len(loader):.6f}")
+            scheduler.step()
+            avg_loss = total_loss / len(loader)
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"Epoch {epoch + 1:03d} | Loss: {avg_loss:.6f} | LR: {current_lr:.2e}")
+            
             if (epoch + 1) % config.vis_every == 0:
                 visualize_grid(model, loader, os.path.join(run_dir, f"epoch_{epoch + 1}.png"), config, device)
                 print(f"Eval saved to: {run_dir}")
