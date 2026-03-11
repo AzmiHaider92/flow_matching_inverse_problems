@@ -188,10 +188,10 @@ if __name__ == "__main__":
         # Add a unique suffix so we don't overwrite training images
         timestamp_eval = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         out_name = f"eval_{timestamp_eval}.png"
+        img_path = os.path.join(run_dir, out_name)
+        visualize_grid(model, loader, img_path, config, device=device)
 
-        visualize_grid(model, loader, out_name, steps=config.guide_steps,
-                       patch_size=config.patch_size, device=device)
-        print(f"Evaluation image saved to: {os.path.join(run_dir, out_name)}")
+        print(f"Evaluation image saved to: {img_path}")
 
     # --- TRAINING MODE (IGFM) ---
     else:
@@ -266,8 +266,7 @@ if __name__ == "__main__":
 
             if (epoch + 1) % config.vis_every == 0:
                 img_path = os.path.join(run_dir, f"epoch_{epoch + 1:03d}.png")
-                visualize_grid(model, loader, img_path, steps=config.guide_steps,
-                               patch_size=config.patch_size, device=device)
+                visualize_grid(model, loader, img_path, config, device=device)
                 torch.save(model.state_dict(), os.path.join(run_dir, "last_model.pt"))
                 print(f"Eval saved to: {run_dir}")
 
