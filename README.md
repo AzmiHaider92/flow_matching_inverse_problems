@@ -56,12 +56,12 @@ The following figures demonstrate the model's ability to complete digits based o
 
 Patch Size 14:
 <p align="center">
-  <img src="eval_patch14.png" alt="Patching" width="500px"/>
+  <img src="eval_patch14.png" alt="Patching" width="800px"/>
 </p
 
 Patch Size 10:
 <p align="center">
-  <img src="eval_patch10.png" alt="Patching" width="500px"/>
+  <img src="eval_patch10.png" alt="Patching" width="800px"/>
 </p
 
 Column Description
