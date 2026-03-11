@@ -37,37 +37,40 @@ class FullImageFlowModel(nn.Module):
         self.class_emb = nn.Embedding(num_classes, cond_dim)
         self.time_emb = FourierEmbedding(1, 64, scale=20.0)
 
-        # Project 576 -> 64 to use as conditioning channels
-        self.cond_proj = nn.Linear(cond_dim + 64, 64)
+        # This maps the 512 + 64 features into a shape we can inject into the image
+        self.cond_proj = nn.Linear(cond_dim + 64, 128)
 
-        # A Mini-UNet style architecture
-        self.down1 = nn.Conv2d(1 + 64, 64, kernel_size=3, padding=1)
-        self.down2 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)  # 14x14
-
-        self.mid = ResBlock(128)  # You'll need to update ResBlock to use Conv2d
-
-        self.up1 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)  # 28x28
-        self.out = nn.Conv2d(64 + 64, 1, kernel_size=3, padding=1)
+        # Backbone
+        self.net = nn.Sequential(
+            # Input: 1 (image) + 128 (condition channels) = 129
+            nn.Conv2d(1 + 128, 64, kernel_size=3, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(64, 1, kernel_size=3, padding=1)
+        )
 
     def forward(self, x_t, t, labels):
-        B, _, H, W = x_t.shape
+        # x_t: [B, 1, 28, 28]
+        B, C, H, W = x_t.shape
 
-        # Fix the conditioning: Use all dimensions!
+        # 1. Get Embeddings: result is [B, 576]
         c_e = self.class_emb(labels)
         t_e = self.time_emb(t)
-        cond = self.cond_proj(torch.cat([c_e, t_e], dim=-1))  # [B, 64]
-        cond_map = cond.view(B, 64, 1, 1).expand(B, 64, H, W)
 
-        # Encoder
-        x = torch.cat([x_t, cond_map], dim=1)
-        feat1 = torch.relu(self.down1(x))
-        feat2 = torch.relu(self.down2(feat1))
+        # 2. Project conditioning: result is [B, 128]
+        # This is where your mat1/mat2 error was likely happening.
+        # Ensure we are only passing the 2D [B, 576] tensor here.
+        cond = self.cond_proj(torch.cat([c_e, t_e], dim=-1))
 
-        # Bottleneck (Global context)
-        # Note: If your ResBlock is Linear, swap it for a simple Conv block here
-        mid = torch.relu(self.mid(feat2)) if hasattr(self, 'mid') else feat2
+        # 3. Broadcast to Spatial: [B, 128, 28, 28]
+        # We turn the vector into a "stack of maps" so the Conv layer can read it
+        cond_map = cond.view(B, 128, 1, 1).expand(B, 128, H, W)
 
-        # Decoder with Skip Connection
-        up = torch.relu(self.up1(mid))
-        out = self.out(torch.cat([up, cond_map], dim=1))
-        return out
+        # 4. Concatenate and run ConvNet
+        # Input to Conv2d is now [B, 129, 28, 28]
+        input_tensor = torch.cat([x_t, cond_map], dim=1)
+
+        return self.net(input_tensor)

@@ -49,69 +49,87 @@ def get_foreground_indices(images, patch_size, image_size=28):
     return y_idx, x_idx
 
 
+import torch.nn.functional as F
+
+
 def f_project(X, y_idx, x_idx, patch_size):
     """
-    Extracts the patch based on provided indices.
+    X: [B, 1, 28, 28]
+    y_idx, x_idx: [B] tensors of patch top-left coordinates
+    Returns: [B, patch_size * patch_size]
     """
-    B = X.shape[0]
-    patches = []
-    for i in range(B):
-        patch = X[i, 0, y_idx[i]:y_idx[i] + patch_size, x_idx[i]:x_idx[i] + patch_size]
-        patches.append(patch.reshape(-1))
-    return torch.stack(patches)
+    B, C, H, W = X.shape
+
+    # 1. Extract all possible patches: [B, C*p*p, L] where L is number of positions
+    # For MNIST 28x28 and patch 7, L = (28-7+1)^2 = 484
+    patches = F.unfold(X, kernel_size=patch_size)
+
+    # 2. Convert (y, x) coordinates to a linear index for the 'L' dimension
+    # Index = y * (W - patch_size + 1) + x
+    stride_w = W - patch_size + 1
+    linear_indices = y_idx * stride_w + x_idx
+
+    # 3. Gather the specific patch for each image in the batch
+    # linear_indices: [B] -> [1, B, 1] for gather
+    # patches: [B, patch_dim, L]
+    linear_indices = linear_indices.view(B, 1, 1).expand(-1, patch_size ** 2, -1)
+    selected_patches = patches.gather(2, linear_indices).squeeze(-1)
+
+    return selected_patches  # [B, 49]
 
 
 @torch.no_grad()
 def visualize_grid(model, loader, output_path, config, device='cpu'):
     model.eval()
     n_rows = 4
-    # 4 columns: GT, Patch, Pure Gen (No hint), Guided Gen (The Dream)
-    fig, axes = plt.subplots(n_rows, 4, figsize=(12, 12))
+    # Columns: GT, Observed Patch, Pure Generation, IGFM Dream
+    fig, axes = plt.subplots(n_rows, 4, figsize=(15, 12))
 
     images, labels = next(iter(loader))
     images, labels = images[:n_rows].to(device), labels[:n_rows].to(device)
     B = images.shape[0]
 
-    # Use foreground sampler for better visualization examples
+    # Get Foreground Patches for better visual testing
     y_idx, x_idx = get_foreground_indices(images, config.patch_size)
     y_obs = f_project(images, y_idx, x_idx, config.patch_size)
 
-    # --- COL 2: Patch Image ---
-    patch_images = torch.zeros_like(images)
+    # Column 2: The Masked Input
+    patch_viz = torch.zeros_like(images)
     for i in range(B):
-        patch_images[i, 0, y_idx[i]:y_idx[i] + config.patch_size, x_idx[i]:x_idx[i] + config.patch_size] = \
+        patch_viz[i, 0, y_idx[i]:y_idx[i] + config.patch_size, x_idx[i]:x_idx[i] + config.patch_size] = \
             y_obs[i].view(config.patch_size, config.patch_size)
 
-    # --- COL 3: Pure Generation (No Guidance) ---
+    # Column 3: Pure Generation (Start t=0, move to t=1)
     x_gen = torch.randn_like(images)
-    dt = 1.0 / config.guide_steps
-    for s in range(config.guide_steps):
-        t = torch.ones(B, 1).to(device) * (s * dt)
+    dt = 1.0 / config.fm_steps
+    for s in range(config.fm_steps):
+        t = torch.ones(B, 1, device=device) * (s * dt)
         x_gen = x_gen + model(x_gen, t, labels) * dt
 
-    # --- COL 4: Guided "Dream" (IGFM logic) ---
+    # Column 4: IGFM Dream (Guided)
     x_dream = torch.randn_like(images)
+    dt_g = 1.0 / config.guide_steps
     for s in range(config.guide_steps):
-        t = torch.ones(B, 1).to(device) * (s * dt)
-        x_dream = x_dream + model(x_dream, t, labels) * dt
+        t = torch.ones(B, 1, device=device) * (s * dt_g)
+        x_dream = x_dream + model(x_dream, t, labels) * dt_g
 
-        # Apply GPS Guidance
+        # Guidance step
         with torch.enable_grad():
             x_dream.requires_grad_(True)
-            pred_y = f_project(x_dream, y_idx, x_idx, config.patch_size)
-            loss = torch.sum((pred_y - y_obs) ** 2)
-            grad = torch.autograd.grad(loss, x_dream)[0]
+            y_hat = f_project(x_dream, y_idx, x_idx, config.patch_size)
+            loss_g = F.mse_loss(y_hat, y_obs) * 0.5 * (config.patch_size ** 2)
+            grad = torch.autograd.grad(loss_g, x_dream)[0]
             x_dream = x_dream.detach() - config.eta * grad
 
-    for i in range(n_rows):
-        axes[i, 0].imshow(images[i, 0].cpu(), cmap='gray')
-        axes[i, 1].imshow(patch_images[i, 0].cpu(), cmap='gray')
-        axes[i, 2].imshow(x_gen[i, 0].cpu(), cmap='gray')
-        axes[i, 3].imshow(x_dream[i, 0].cpu(), cmap='gray')
+    # --- Plotting ---
+    imgs = [images, patch_viz, x_gen, x_dream]
+    titles = ["GT", "Patch", "Unconditional", "IGFM Dream"]
 
-    titles = ["GT", "Observed Patch", "Pure Gen", "IGFM Dream"]
-    for ax, title in zip(axes[0], titles): ax.set_title(title)
-    for ax in axes.flatten(): ax.axis('off')
+    for r in range(n_rows):
+        for c in range(4):
+            axes[r, c].imshow(imgs[c][r, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+            if r == 0: axes[r, c].set_title(titles[c])
+            axes[r, c].axis('off')
 
     plt.tight_layout()
     plt.savefig(output_path)
