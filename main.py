@@ -39,19 +39,13 @@ def visualize_grid(model, loader, output_path, steps=25, patch_size=7, device='c
             images[i, 0, y:y + patch_size, x:x + patch_size]
 
     # --- COLUMN 3: Generate the Predicted Image (ODE Solve) ---
-    # Start from pure noise
-    x_hat = torch.randn_like(images)
+    x_hat = torch.randn_like(images)  # Start at t=0
     dt = 1.0 / steps
 
     for s in range(steps):
-        # Time goes from 1 (noise) to 0 (clean)
-        t = torch.ones(B, 1).to(device) * (1.0 - s * dt)
-
-        # Predict velocity
+        t = torch.ones(B, 1).to(device) * (s * dt)  # 0.0 -> 1.0
         vt = model(x_hat, t, labels)
-
-        # Euler step: x_{t-dt} = x_t - vt * dt
-        x_hat = x_hat - vt * dt
+        x_hat = x_hat + vt * dt  # Step toward the image
 
     # --- Plotting ---
     for i in range(n_rows):
@@ -77,12 +71,9 @@ def visualize_grid(model, loader, output_path, steps=25, patch_size=7, device='c
 
 def f_project(X, y_idx, x_idx, patch_size):
     B = X.shape[0]
-    patches = []
-    for i in range(B):
-        # Use the passed-in indices instead of random ones
-        patch = X[i, 0, y_idx[i]:y_idx[i] + patch_size, x_idx[i]:x_idx[i] + patch_size]
-        patches.append(patch.reshape(-1))
-    return torch.stack(patches)
+    # This grabs all patches at once without the Python loop
+    patches = X.unfold(2, patch_size, 1).unfold(3, patch_size, 1)
+    return patches[torch.arange(B), 0, y_idx, x_idx].reshape(B, -1)
 
 
 def get_args():
@@ -167,41 +158,39 @@ if __name__ == "__main__":
                 # --- PHASE 1: GUIDED SAMPLING ---
                 model.eval()
                 with torch.no_grad():
-                    x_hat = torch.randn(B, 1, image_size, image_size).to(device)
+                    x_hat = torch.randn(B, 1, image_size, image_size).to(device)  # Start at t=0
                     dt = 1.0 / config.guide_steps
 
                     for s in range(config.guide_steps):
-                        t_curr = torch.ones(B, 1).to(device) * (1.0 - s * dt)
+                        t_curr = torch.ones(B, 1).to(device) * (s * dt)  # t goes 0.0 -> 1.0
+
                         vt = model(x_hat, t_curr, labels)
-                        x_hat = x_hat - vt * dt
+
+                        # We are moving in the direction of the velocity (toward t=1)
+                        x_hat = x_hat + vt * dt
 
                         with torch.enable_grad():
                             x_hat.requires_grad_(True)
-                            # Pass the SAME indices here
                             prediction_y = f_project(x_hat, y_idx, x_idx, config.patch_size)
                             guidance_loss = torch.sum((prediction_y - y_obs) ** 2)
                             grad = torch.autograd.grad(guidance_loss, x_hat)[0]
+                            # Guidance pulls the current state toward the observation
                             x_hat = x_hat.detach() - config.eta * grad
 
-                # --- PHASE 2: FLOW MATCHING (The "Study") ---
+                # --- PHASE 2: FLOW MATCHING ---
                 model.train()
-                # The model now trains to generate the FULL image it just hallucinated
-                x1 = x_hat.detach()
-                x0 = torch.randn_like(x1)
-                # 1. Reshape t for broadcasting: [B] -> [B, 1, 1, 1]
+                x1 = x_hat.detach()  # Clean Image (Dreamed)
+                x0 = torch.randn_like(x1)  # Pure Noise
+
                 t = torch.rand(B, device=device).unsqueeze(-1)
                 t_view = t.view(B, 1, 1, 1)
 
-                # 2. Standard Flow: xt = (1 - t)*x1 + t*x0
-                # At t=0, xt = x1 (Clean)
-                # At t=1, xt = x0 (Noise)
-                xt = (1 - t_view) * x1 + t_view * x0
+                # xt: at t=0, xt=x0 (Noise); at t=1, xt=x1 (Image)
+                xt = (1 - t_view) * x0 + t_view * x1
 
-                # 3. Target Velocity: The vector pointing FROM Noise TO Image
-                # Since we are solving from t=1 down to t=0:
+                # ut: The vector points from Noise to Image
                 ut = x1 - x0
 
-                # 4. Training Loss
                 vt_pred = model(xt, t, labels)
                 loss = torch.mean((vt_pred - ut) ** 2)
 
