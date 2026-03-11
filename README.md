@@ -1,6 +1,6 @@
 # Iterative Guided Flow Matching for Inverse Problems
 
-This repository implements a Stochastic Expectation-Maximization (SEM) framework for learning a generative prior $P(X)$ from incomplete observations $Y$.
+This project implements Iterative Guided Flow Matching for conditional image completion on the EMNIST dataset. The model learns to generate full-image digits that are topologically consistent with a randomly sampled mxm observation patch.
 
 <p align="center">
   <img src="patching.png" alt="Patching" width="500px"/>
@@ -41,4 +41,12 @@ Goal: Update the model $v_\theta$ to treat the generated $\hat{X}$ as the new gr
 <br>
 
 By repeating these two phases, the model experiences a "self-correction" loop.In the beginning, the Guidance does the heavy lifting, forcing the noise to at least contain the correct crop $y$. Over many iterations, the Flow Matching model learns the common patterns across all various crops in the dataset, eventually recovering the full global prior $P(X)$ without ever seeing a complete original image.
+
+### Classifier-Free Guidance (CFG)
+
+To achieve both diversity and high visual fidelity, the model implements CFG:Label Dropout: During training, 10% of class labels are replaced with a "null" token (Index 10).
+- Sampling: At inference, the model extrapolates between the unconditional (null) prediction and the conditional prediction: <br>
+  <p align="center">$v_{cfg} = v_{uncond} + \text{cfg\_scale} \cdot (v_{cond} - v_{uncond})$</p>
+- Result: High CFG scales (3.0+) produce sharp, prototypical digit shapes, while the null token allows the model to explore multiple digit classes that could realistically fit the provided patch.
+
 
