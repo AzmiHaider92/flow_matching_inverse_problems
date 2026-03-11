@@ -212,12 +212,14 @@ if __name__ == "__main__":
 
             scheduler.step()
             avg_loss = total_loss / len(loader)
-            print(f"Epoch {epoch + 1:03d} | Loss: {avg_loss:.6f}")
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"Epoch {epoch + 1:03d} | Loss: {avg_loss:.6f} | LR: {current_lr:.2e}")
 
             if (epoch + 1) % config.vis_every == 0:
                 img_path = os.path.join(run_dir, f"epoch_{epoch + 1:03d}.png")
                 visualize_grid(model, loader, img_path, steps=config.guide_steps,
                                patch_size=config.patch_size, device=device)
                 torch.save(model.state_dict(), os.path.join(run_dir, "last_model.pt"))
+                print(f"Eval saved to: {run_dir}")
 
         print(f"Results saved to: {run_dir}")
