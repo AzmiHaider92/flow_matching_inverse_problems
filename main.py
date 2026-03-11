@@ -14,66 +14,108 @@ from model import FullImageFlowModel
 image_size = 28
 
 
+def get_foreground_indices(images, patch_size, image_size=28):
+    """
+    Finds patches that actually contain digit pixels.
+    """
+    B, _, H, W = images.shape
+    device = images.device
+
+    # Create a mask of 'ink' pixels
+    mask = (images > 0.1).float().view(B, -1)
+
+    y_idx = torch.zeros(B, dtype=torch.long, device=device)
+    x_idx = torch.zeros(B, dtype=torch.long, device=device)
+
+    for i in range(B):
+        fg_indices = torch.nonzero(mask[i])
+        if len(fg_indices) > 0:
+            # Pick a random pixel that has ink
+            idx = fg_indices[torch.randint(0, len(fg_indices), (1,))]
+            py, px = idx // W, idx % W
+
+            # Randomly offset so the ink isn't always perfectly centered
+            off_y = torch.randint(-patch_size + 1, 1, (1,))
+            off_x = torch.randint(-patch_size + 1, 1, (1,))
+
+            y = torch.clamp(py + off_y, 0, H - patch_size)
+            x = torch.clamp(px + off_x, 0, W - patch_size)
+        else:
+            # Fallback for empty images
+            y = torch.randint(0, H - patch_size + 1, (1,))
+            x = torch.randint(0, W - patch_size + 1, (1,))
+
+        y_idx[i], x_idx[i] = y, x
+    return y_idx, x_idx
+
+
+def f_project(X, y_idx, x_idx, patch_size):
+    """
+    Extracts the patch based on provided indices.
+    """
+    B = X.shape[0]
+    patches = []
+    for i in range(B):
+        patch = X[i, 0, y_idx[i]:y_idx[i] + patch_size, x_idx[i]:x_idx[i] + patch_size]
+        patches.append(patch.reshape(-1))
+    return torch.stack(patches)
+
+
 @torch.no_grad()
-def visualize_grid(model, loader, output_path, steps=25, patch_size=7, device='cpu'):
+def visualize_grid(model, loader, output_path, config, device='cpu'):
     model.eval()
     n_rows = 4
-    fig, axes = plt.subplots(n_rows, 3, figsize=(10, 12))
+    # 4 columns: GT, Patch, Pure Gen (No hint), Guided Gen (The Dream)
+    fig, axes = plt.subplots(n_rows, 4, figsize=(12, 12))
 
-    # Get a batch of real data
     images, labels = next(iter(loader))
     images, labels = images[:n_rows].to(device), labels[:n_rows].to(device)
     B = images.shape[0]
 
-    # 1. Generate Random Patch Locations for the visualization
-    max_off = images.shape[-1] - patch_size
-    x_idx = torch.randint(0, max_off + 1, (B,))
-    y_idx = torch.randint(0, max_off + 1, (B,))
+    # Use foreground sampler for better visualization examples
+    y_idx, x_idx = get_foreground_indices(images, config.patch_size)
+    y_obs = f_project(images, y_idx, x_idx, config.patch_size)
 
-    # --- COLUMN 2: Create the "Patch Image" (Masked GT) ---
-    # Start with a black canvas and paste only the ground truth patch
+    # --- COL 2: Patch Image ---
     patch_images = torch.zeros_like(images)
     for i in range(B):
-        y, x = y_idx[i], x_idx[i]
-        patch_images[i, 0, y:y + patch_size, x:x + patch_size] = \
-            images[i, 0, y:y + patch_size, x:x + patch_size]
+        patch_images[i, 0, y_idx[i]:y_idx[i] + config.patch_size, x_idx[i]:x_idx[i] + config.patch_size] = \
+            y_obs[i].view(config.patch_size, config.patch_size)
 
-    # --- COLUMN 3: Generate the Predicted Image (ODE Solve) ---
-    x_hat = torch.randn_like(images)  # Start at t=0
-    dt = 1.0 / steps
+    # --- COL 3: Pure Generation (No Guidance) ---
+    x_gen = torch.randn_like(images)
+    dt = 1.0 / config.guide_steps
+    for s in range(config.guide_steps):
+        t = torch.ones(B, 1).to(device) * (s * dt)
+        x_gen = x_gen + model(x_gen, t, labels) * dt
 
-    for s in range(steps):
-        t = torch.ones(B, 1).to(device) * (s * dt)  # 0.0 -> 1.0
-        vt = model(x_hat, t, labels)
-        x_hat = x_hat + vt * dt  # Step toward the image
+    # --- COL 4: Guided "Dream" (IGFM logic) ---
+    x_dream = torch.randn_like(images)
+    for s in range(config.guide_steps):
+        t = torch.ones(B, 1).to(device) * (s * dt)
+        x_dream = x_dream + model(x_dream, t, labels) * dt
 
-    # --- Plotting ---
+        # Apply GPS Guidance
+        with torch.enable_grad():
+            x_dream.requires_grad_(True)
+            pred_y = f_project(x_dream, y_idx, x_idx, config.patch_size)
+            loss = torch.sum((pred_y - y_obs) ** 2)
+            grad = torch.autograd.grad(loss, x_dream)[0]
+            x_dream = x_dream.detach() - config.eta * grad
+
     for i in range(n_rows):
-        # Col 1: Ground Truth
-        axes[i, 0].imshow(images[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
-        axes[i, 0].set_title("Ground Truth")
+        axes[i, 0].imshow(images[i, 0].cpu(), cmap='gray')
+        axes[i, 1].imshow(patch_images[i, 0].cpu(), cmap='gray')
+        axes[i, 2].imshow(x_gen[i, 0].cpu(), cmap='gray')
+        axes[i, 3].imshow(x_dream[i, 0].cpu(), cmap='gray')
 
-        # Col 2: The Patch (Observation)
-        axes[i, 1].imshow(patch_images[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
-        axes[i, 1].set_title(f"Patch (y) at {x_idx[i].item()},{y_idx[i].item()}")
-
-        # Col 3: Model Prediction
-        axes[i, 2].imshow(x_hat[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
-        axes[i, 2].set_title("Generated X")
-
-    for ax in axes.flatten():
-        ax.axis('off')
+    titles = ["GT", "Observed Patch", "Pure Gen", "IGFM Dream"]
+    for ax, title in zip(axes[0], titles): ax.set_title(title)
+    for ax in axes.flatten(): ax.axis('off')
 
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
-
-
-def f_project(X, y_idx, x_idx, patch_size):
-    B = X.shape[0]
-    # This grabs all patches at once without the Python loop
-    patches = X.unfold(2, patch_size, 1).unfold(3, patch_size, 1)
-    return patches[torch.arange(B), 0, y_idx, x_idx].reshape(B, -1)
 
 
 def get_args():

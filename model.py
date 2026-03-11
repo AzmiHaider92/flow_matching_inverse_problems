@@ -34,37 +34,40 @@ class ResBlock(nn.Module):
 class FullImageFlowModel(nn.Module):
     def __init__(self, cond_dim=512, num_classes=10):
         super().__init__()
-        # Embeddings for class and time
         self.class_emb = nn.Embedding(num_classes, cond_dim)
         self.time_emb = FourierEmbedding(1, 64, scale=20.0)
 
-        # Projection for conditioning
-        self.cond_proj = nn.Linear(cond_dim + 64, 128)
+        # Project 576 -> 64 to use as conditioning channels
+        self.cond_proj = nn.Linear(cond_dim + 64, 64)
 
-        # A simple Convolutional Encoder-Decoder (No patches!)
-        self.net = nn.Sequential(
-            nn.Conv2d(1 + 1, 64, kernel_size=3, padding=1),  # +1 for time/cond channel
-            nn.SiLU(),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(64, 1, kernel_size=3, padding=1)  # Output velocity [B, 1, 28, 28]
-        )
+        # A Mini-UNet style architecture
+        self.down1 = nn.Conv2d(1 + 64, 64, kernel_size=3, padding=1)
+        self.down2 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)  # 14x14
+
+        self.mid = ResBlock(128)  # You'll need to update ResBlock to use Conv2d
+
+        self.up1 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)  # 28x28
+        self.out = nn.Conv2d(64 + 64, 1, kernel_size=3, padding=1)
 
     def forward(self, x_t, t, labels):
-        # x_t: [B, 1, 28, 28]
-        B, C, H, W = x_t.shape
+        B, _, H, W = x_t.shape
 
-        # Merge conditioning into a spatial map
+        # Fix the conditioning: Use all dimensions!
         c_e = self.class_emb(labels)
         t_e = self.time_emb(t)
-        cond = self.cond_proj(torch.cat([c_e, t_e], dim=-1))  # [B, 128]
+        cond = self.cond_proj(torch.cat([c_e, t_e], dim=-1))  # [B, 64]
+        cond_map = cond.view(B, 64, 1, 1).expand(B, 64, H, W)
 
-        # Broadcast conditioning to match image size [B, 1, 28, 28]
-        cond_map = cond[:, :1].view(B, 1, 1, 1).expand(B, 1, H, W)
+        # Encoder
+        x = torch.cat([x_t, cond_map], dim=1)
+        feat1 = torch.relu(self.down1(x))
+        feat2 = torch.relu(self.down2(feat1))
 
-        # Concatenate image and condition channel
-        input_tensor = torch.cat([x_t, cond_map], dim=1)
+        # Bottleneck (Global context)
+        # Note: If your ResBlock is Linear, swap it for a simple Conv block here
+        mid = torch.relu(self.mid(feat2)) if hasattr(self, 'mid') else feat2
 
-        return self.net(input_tensor)
+        # Decoder with Skip Connection
+        up = torch.relu(self.up1(mid))
+        out = self.out(torch.cat([up, cond_map], dim=1))
+        return out
