@@ -181,41 +181,21 @@ if __name__ == "__main__":
                 y_idx, x_idx = get_foreground_indices(images, config.patch_size)
                 y_obs = f_project(images, y_idx, x_idx, config.patch_size)
 
-                # --- PHASE 1: Dream (Tuned for 7x7 Patch) ---
+                # PHASE 1: Dream (Use real labels for dreaming)
                 model.eval()
                 with torch.no_grad():
                     x_hat = torch.randn_like(images)
                     dt = 1.0 / config.guide_steps
                     for s in range(config.guide_steps):
-                        t_val = s * dt
-                        t_c = torch.ones(B, 1, device=device) * t_val
-
-                        # 1. Standard Velocity
+                        t_c = torch.ones(B, 1, device=device) * (s * dt)
                         x_hat = x_hat + model(x_hat, t_c, labels) * dt
-
                         with torch.enable_grad():
                             x_hat.requires_grad_(True)
                             y_h = f_project(x_hat, y_idx, x_idx, config.patch_size)
-
-                            # Use SUM for a high-energy signal
                             g_loss = torch.sum((y_h - y_obs) ** 2)
                             grad = torch.autograd.grad(g_loss, x_hat)[0]
-
-                            # --- STABILIZATION ---
-                            grad_norm = torch.norm(grad)
-                            if grad_norm > 1e-8:
-                                # Normalize, then scale back up to a "strong" unit (2.0)
-                                # This makes every step meaningful without being infinite
-                                grad = (grad / grad_norm) * 2.0
-
-                                # --- ANNEALING & UPDATING ---
-                            # Try increasing config.eta to 0.5 in your args for 7x7
-                            current_eta = config.eta * (1.0 - t_val)
-                            x_hat = x_hat.detach() - current_eta * grad
-
-                            # Tight clamp to keep the image in the EMNIST pixel range
-                            x_hat = torch.clamp(x_hat, -2.0, 2.0)
-
+                            x_hat = x_hat.detach() - config.eta * grad
+                            
                 # PHASE 2: Train with CFG Labels
                 model.train()
                 x1, x0 = x_hat.detach(), torch.randn_like(x_hat)
