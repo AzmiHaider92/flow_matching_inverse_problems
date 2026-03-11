@@ -181,7 +181,7 @@ if __name__ == "__main__":
                 y_idx, x_idx = get_foreground_indices(images, config.patch_size)
                 y_obs = f_project(images, y_idx, x_idx, config.patch_size)
 
-                # PHASE 1: Dream (Stable & Annealed)
+                # --- PHASE 1: Dream (Tuned for 7x7 Patch) ---
                 model.eval()
                 with torch.no_grad():
                     x_hat = torch.randn_like(images)
@@ -190,35 +190,31 @@ if __name__ == "__main__":
                         t_val = s * dt
                         t_c = torch.ones(B, 1, device=device) * t_val
 
-                        # 1. Base Velocity Step
+                        # 1. Standard Velocity
                         x_hat = x_hat + model(x_hat, t_c, labels) * dt
 
-                        # 2. Guidance Step
                         with torch.enable_grad():
                             x_hat.requires_grad_(True)
                             y_h = f_project(x_hat, y_idx, x_idx, config.patch_size)
 
-                            # Use Mean (MSE) for 7x7—it's much more stable than Sum
-                            g_loss = F.mse_loss(y_h, y_obs)
+                            # Use SUM for a high-energy signal
+                            g_loss = torch.sum((y_h - y_obs) ** 2)
                             grad = torch.autograd.grad(g_loss, x_hat)[0]
 
-                            # --- STABILIZATION: The Normalization ---
-                            # Calculate the 'length' of the gradient vector
+                            # --- STABILIZATION ---
                             grad_norm = torch.norm(grad)
                             if grad_norm > 1e-8:
-                                # Turn the gradient into a pure direction (length 1.0)
-                                grad = grad / grad_norm
+                                # Normalize, then scale back up to a "strong" unit (2.0)
+                                # This makes every step meaningful without being infinite
+                                grad = (grad / grad_norm) * 2.0
 
-                                # --- ANNEALING: Fade out pull as digit forms ---
-                            # Strong at t=0, zero at t=1
+                                # --- ANNEALING & UPDATING ---
+                            # Try increasing config.eta to 0.5 in your args for 7x7
                             current_eta = config.eta * (1.0 - t_val)
-
-                            # Apply the controlled step
                             x_hat = x_hat.detach() - current_eta * grad
 
-                            # --- SAFETY RAIL ---
-                            # Prevent pixel values from spiraling to infinity
-                            x_hat = torch.clamp(x_hat, -5.0, 5.0)
+                            # Tight clamp to keep the image in the EMNIST pixel range
+                            x_hat = torch.clamp(x_hat, -2.0, 2.0)
 
                 # PHASE 2: Train with CFG Labels
                 model.train()
