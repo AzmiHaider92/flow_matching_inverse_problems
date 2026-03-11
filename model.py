@@ -36,18 +36,20 @@ class FullImageFlowModel(nn.Module):
         super().__init__()
         self.class_emb = nn.Embedding(num_classes, cond_dim)
         self.time_emb = FourierEmbedding(1, 64, scale=20.0)
-
-        # This maps the 512 + 64 features into a shape we can inject into the image
         self.cond_proj = nn.Linear(cond_dim + 64, 128)
 
-        # Backbone
+        # UPDATED BACKBONE: Added dilation to see the whole 28x28 image
         self.net = nn.Sequential(
-            # Input: 1 (image) + 128 (condition channels) = 129
             nn.Conv2d(1 + 128, 64, kernel_size=3, padding=1),
             nn.SiLU(),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            # Dilation=2 sees 5x5
+            nn.Conv2d(64, 128, kernel_size=3, padding=2, dilation=2),
             nn.SiLU(),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            # Dilation=4 sees 9x9
+            nn.Conv2d(128, 128, kernel_size=3, padding=4, dilation=4),
+            nn.SiLU(),
+            # Dilation=8 sees 17x17 (Getting close to full image!)
+            nn.Conv2d(128, 64, kernel_size=3, padding=8, dilation=8),
             nn.SiLU(),
             nn.Conv2d(64, 1, kernel_size=3, padding=1)
         )
