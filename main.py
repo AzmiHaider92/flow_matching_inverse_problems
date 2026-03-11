@@ -222,5 +222,6 @@ if __name__ == "__main__":
             if (epoch + 1) % config.vis_every == 0:
                 visualize_grid(model, loader, os.path.join(run_dir, f"epoch_{epoch + 1}.png"), config, device)
                 print(f"Eval saved to: {run_dir}")
+                torch.save(model.state_dict(), os.path.join(run_dir, "last_model.pt"))
 
         print(f"Results saved to: {run_dir}")
