@@ -73,7 +73,7 @@ Patch: The masked input provided to the model. This is the only "hint" the model
 
 S1-3: A completion sampled using the Null Label (Index 10) and a random noise initialization. This shows the model's first "guess" at a valid digit that fits the patch.
 A second completion using a different random noise seed. Because it uses the Null Label, the model may explore a different topological path or digit class than Dream A.
-A third completion, further demonstrating the multimodal nature of the IGFM algorithm. In ambiguous cases (e.g., a single vertical stroke), these three "Dreams" may result in entirely different digits (like a 1, 4, or 7) that all perfectly anchor to the input patch.
+A third completion, further demonstrating the multimodal nature of the IGFM algorithm. In ambiguous cases (e.g., a single vertical stroke), these three "samples" may result in entirely different digits (like a 1, 4, or 7) that all perfectly anchor to the input patch.
 
 Prior: A reconstruction using full Classifier-Free Guidance (CFG) on the ground-truth label. This verifies the model's peak performance and structural integrity for the known class.
 
