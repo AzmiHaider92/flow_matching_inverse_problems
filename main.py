@@ -195,7 +195,7 @@ if __name__ == "__main__":
                             g_loss = torch.sum((y_h - y_obs) ** 2)
                             grad = torch.autograd.grad(g_loss, x_hat)[0]
                             x_hat = x_hat.detach() - config.eta * grad
-                            
+
                 # PHASE 2: Train with CFG Labels
                 model.train()
                 x1, x0 = x_hat.detach(), torch.randn_like(x_hat)
