@@ -1,27 +1,21 @@
 import argparse
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 import os
 from datetime import datetime
-
-# Local imports
 from data import EMNIST
 from model import FullImageFlowModel
+import torch.nn.functional as F
 
 image_size = 28
 
 
 def get_foreground_indices(images, patch_size, image_size=28):
-    """
-    Finds patches that actually contain digit pixels.
-    """
     B, _, H, W = images.shape
-    device = images.device
+    device = images.device  # Get the current device (cuda:0)
 
-    # Create a mask of 'ink' pixels
     mask = (images > 0.1).float().view(B, -1)
 
     y_idx = torch.zeros(B, dtype=torch.long, device=device)
@@ -30,26 +24,24 @@ def get_foreground_indices(images, patch_size, image_size=28):
     for i in range(B):
         fg_indices = torch.nonzero(mask[i])
         if len(fg_indices) > 0:
-            # Pick a random pixel that has ink
-            idx = fg_indices[torch.randint(0, len(fg_indices), (1,))]
+            # Pick a random foreground pixel
+            idx = fg_indices[torch.randint(0, len(fg_indices), (1,), device=device)]
             py, px = idx // W, idx % W
 
-            # Randomly offset so the ink isn't always perfectly centered
-            off_y = torch.randint(-patch_size + 1, 1, (1,))
-            off_x = torch.randint(-patch_size + 1, 1, (1,))
+            # Use device=device for the random offsets
+            off_y = torch.randint(-patch_size + 1, 1, (1,), device=device)
+            off_x = torch.randint(-patch_size + 1, 1, (1,), device=device)
 
             y = torch.clamp(py + off_y, 0, H - patch_size)
             x = torch.clamp(px + off_x, 0, W - patch_size)
         else:
-            # Fallback for empty images
-            y = torch.randint(0, H - patch_size + 1, (1,))
-            x = torch.randint(0, W - patch_size + 1, (1,))
+            y = torch.randint(0, H - patch_size + 1, (1,), device=device)
+            x = torch.randint(0, W - patch_size + 1, (1,), device=device)
 
         y_idx[i], x_idx[i] = y, x
     return y_idx, x_idx
 
 
-import torch.nn.functional as F
 
 
 def f_project(X, y_idx, x_idx, patch_size):
