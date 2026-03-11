@@ -44,9 +44,37 @@ By repeating these two phases, the model experiences a "self-correction" loop.In
 
 ### Classifier-Free Guidance (CFG)
 
-To achieve both diversity and high visual fidelity, the model implements CFG:Label Dropout: During training, 10% of class labels are replaced with a "null" token (Index 10).
+To achieve both diversity and high visual fidelity, the model implements CFG:
+- Label Dropout: During training, 10% of class labels are replaced with a "null" token (Index 10).
 - Sampling: At inference, the model extrapolates between the unconditional (null) prediction and the conditional prediction: <br>
   <p align="center">$v_{cfg} = v_{uncond} + \text{cfg\_scale} \cdot (v_{cond} - v_{uncond})$</p>
 - Result: High CFG scales (3.0+) produce sharp, prototypical digit shapes, while the null token allows the model to explore multiple digit classes that could realistically fit the provided patch.
+
+
+## Results
+The following figures demonstrate the model's ability to complete digits based on localized 10x10 and 14x14 patches.
+
+Patch Size 14:
+<p align="center">
+  <img src="eval_patch14.png" alt="Patching" width="500px"/>
+</p
+
+Patch Size 10:
+<p align="center">
+  <img src="eval_patch10.png" alt="Patching" width="500px"/>
+</p
+
+Column Description
+The visualization grid is organized into 6 columns to evaluate both reconstruction accuracy and generative diversity:
+
+GT (Ground Truth): The original, unmasked EMNIST digit from the test set.
+
+Patch: The masked input provided to the model. This is the only "hint" the model receives during the guided generation process.
+
+S1-3: A completion sampled using the Null Label (Index 10) and a random noise initialization. This shows the model's first "guess" at a valid digit that fits the patch.
+A second completion using a different random noise seed. Because it uses the Null Label, the model may explore a different topological path or digit class than Dream A.
+A third completion, further demonstrating the multimodal nature of the IGFM algorithm. In ambiguous cases (e.g., a single vertical stroke), these three "Dreams" may result in entirely different digits (like a 1, 4, or 7) that all perfectly anchor to the input patch.
+
+Prior: A reconstruction using full Classifier-Free Guidance (CFG) on the ground-truth label. This verifies the model's peak performance and structural integrity for the known class.
 
 
