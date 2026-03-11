@@ -1,59 +1,44 @@
-# PatchFlow: Coordinate-Conditioned Patch Flow Matching
+# Iterative Guided Flow Matching for Inverse Problems
 
-A generative model that synthesizes $28 \times 28$ images by predicting the velocity of local $7 \times 7$ patches. 
-
-This project explores the boundary between local patch-based training and global structural coherence using **Flow Matching**.
+This repository implements a Stochastic Expectation-Maximization (SEM) framework for learning a generative prior $P(X)$ from incomplete observations $Y$.
 
 <p align="center">
-  <img src="patching.png" alt="Patching" width="600px"/>
+  <img src="patching.png" alt="Patching" width="500px"/>
 </p>
 
 
-## 🧠 The Concept
+## Overview
 
-Unlike standard generative models that process the entire image at once, **PatchFlow** treats an image as a collection of independent patches. 
+The goal is to learn the distribution of a high-dimensional signal $X$ (e.g., a full image) when we only have access to a degraded or partial measurement $Y = f(X)$ (e.g., a crop, a projection, or a blurred image). Since we never observe the ground-truth $X$, the model learns by iteratively "hallucinating" reconstructions and then training on those "hallucinations."
 
-The model learns a vector field $v(x, t)$ that pushes random noise toward a data distribution. To ensure that 16 (or more) independent patches can "stitch" together to form a coherent digit, we use two critical synchronization signals:
+## The Training Loop
 
-1. **Spatial "GPS" (Fourier Features):** High-frequency sinusoidal embeddings of $(x, y)$ coordinates that allow the model to know exactly where a patch sits on the canvas.
-2. **Global Class Signal:** A shared class embedding that ensures all patches are "sculpting" the same digit simultaneously.
+The algorithm alternates between a Sampling Phase (Inference) and a Learning Phase (Optimization).
+### Phase 1: Guided Sampling (The "E-Step")
+Goal: Generate a "full" pseudo-image $\hat{X}$ that is consistent with the observed crop $y$.
+1. Initialize: Start with a latent state of pure Gaussian noise $X_1 \sim \mathcal{N}(0, I)$.
+2. Solve the ODE (Backwards $t=1 \to t=0$): <br>
+   For each discrete timestep $t$ in the ODE trajectory:
+   - Predict Velocity: Compute the current velocity using the model: <br><p align="center">$v = v_\theta(X_t, t)$</p>
+   - Step Toward Data: Move the current state toward the clean manifold: <br> <p align="center">$X_{t-\Delta t} = X_t - \Delta t \cdot v$</p>
+   - Apply Manifold Guidance: Correct the trajectory so the cropped region matches the real observation $y$ using the gradient of the forward loss: <br>
+   <p align="center">$X_{t-\Delta t} = X_{t-\Delta t} - \eta \nabla_{X} \|f(X_{t-\Delta t}) - y\|^2_2$</p>  <br>
+   (Where $\eta$ is the guidance scale/step size).
+4. Final Result: At $t=0$, we obtain a reconstructed candidate $\hat{X}$ that satisfies the physical constraint $f(\hat{X}) \approx y$.
 
-## 🚀 Key Features
+### Phase 2: Flow Matching (The "M-Step")
 
-* **Flow Matching API:** Implements linear probability paths for efficient generative modeling.
-* **Coordinate-Aware MLP:** Uses Random Fourier Features with a scale of 20.0 to capture sharp edge details.
-* **ResNet Backbone:** Deep MLP with residual connections and SiLU activations to map complex vector fields.
-* **Seamless Inference:** * **Global Noise Mapping:** Shared $x_0$ noise across overlapping patches to ensure structural harmony.
-  * **Gaussian Blending:** Weighted averaging of overlapping patches to eliminate grid-boundary artifacts.
-  * **Range Normalization:** Optimized for $[-1, 1]$ pixel space for symmetric gradient flow.
+Goal: Update the model $v_\theta$ to treat the generated $\hat{X}$ as the new ground truth.
+1. Sample Time: Select a random timestep $t \in [0, 1]$.
+2. Construct Noisy State ($X_t$): Create an interpolation between the reconstructed image $\hat{X}$ and a new noise sample $X_1$: <br>
+   <p align="center">$X_t = (1-t)\hat{X} + t X_1$</p>
+3. Define Target Velocity: The ideal vector $u$ that maps the noise back to the image is: <br>
+<p align="center">$u = X_1 - \hat{X}$</p>
+4. Optimize: Update the weights of the velocity network by minimizing the Flow Matching objective: <br>
+<p align="center">$\mathcal{L} = \|v_\theta(X_t, t) - u\|^2_2$</p>
 
-## 🛠 Usage
+<br>
+<br>
 
-### Training
-To start training from scratch:
-```bash
-python main.py --mode train --n_epochs 1500 --patch_size 7 --lr 5e-4 --overlap
-```
-
-### Inference / Evaluation
-To generate a grid of samples from a specific checkpoint:
-```bash
-python main.py --mode eval --ckpt_path path/to/last_model.pt --overlap --fm_steps 64
-```
-
-## 📊 Technical Specifications
-
-| Parameter | Value |
-| :--- | :--- |
-| **Patch Size** | 7x7 |
-| **Coordinate Embedding** | Fourier (Scale: 20.0) |
-| **Activation** | SiLU (Swish) |
-| **Pixel Range** | [-1, 1] |
-| **Inference Stride** | 2 (with overlap) |
-| **ODE Solver** | Euler (64 steps) |
-
-
-## Samples
-
-<img src="samples.png" alt="Samples 1" width="49%"/> <img src="samples2.png" alt="Samples 2" width="49%"/>
+By repeating these two phases, the model experiences a "self-correction" loop.In the beginning, the Guidance does the heavy lifting, forcing the noise to at least contain the correct crop $y$. Over many iterations, the Flow Matching model learns the common patterns across all various crops in the dataset, eventually recovering the full global prior $P(X)$ without ever seeing a complete original image.
 
