@@ -9,59 +9,87 @@ from datetime import datetime
 
 # Local imports
 from data import EMNIST
-from model import PatchFlowModel
+from model import FullImageFlowModel
 
 image_size = 28
 
 
 @torch.no_grad()
-def visualize_grid(model, epoch, num_classes, output_path, steps=25, PATCH_SIZE=7, device='cpu', overlap=True):
+def visualize_grid(model, loader, output_path, steps=25, patch_size=7, device='cpu'):
     model.eval()
-    fig, axes = plt.subplots(3, 3, figsize=(8, 8))
-    stride = 2 if overlap else PATCH_SIZE
+    n_rows = 4
+    fig, axes = plt.subplots(n_rows, 3, figsize=(10, 12))
 
-    for idx in range(9):
-        label_val = torch.randint(0, num_classes, (1,)).to(device)
-        canvas = torch.zeros((image_size, image_size)).to(device)
-        counts = torch.zeros((image_size, image_size)).to(device)
+    # Get a batch of real data
+    images, labels = next(iter(loader))
+    images, labels = images[:n_rows].to(device), labels[:n_rows].to(device)
+    B = images.shape[0]
 
-        # Use Global Noise Map to ensure structural consistency
-        global_noise = torch.randn(1, 1, image_size, image_size).to(device)
+    # 1. Generate Random Patch Locations for the visualization
+    max_off = images.shape[-1] - patch_size
+    x_idx = torch.randint(0, max_off + 1, (B,))
+    y_idx = torch.randint(0, max_off + 1, (B,))
 
-        if overlap:
-            y_m, x_m = torch.meshgrid(torch.linspace(-1, 1, PATCH_SIZE), torch.linspace(-1, 1, PATCH_SIZE),
-                                      indexing='ij')
-            mask = torch.exp(-(x_m ** 2 + y_m ** 2) / 0.5).to(device)
-        else:
-            mask = torch.ones((PATCH_SIZE, PATCH_SIZE)).to(device)
+    # --- COLUMN 2: Create the "Patch Image" (Masked GT) ---
+    # Start with a black canvas and paste only the ground truth patch
+    patch_images = torch.zeros_like(images)
+    for i in range(B):
+        y, x = y_idx[i], x_idx[i]
+        patch_images[i, 0, y:y + patch_size, x:x + patch_size] = \
+            images[i, 0, y:y + patch_size, x:x + patch_size]
 
-        for y_start in range(0, image_size - PATCH_SIZE + 1, stride):
-            for x_start in range(0, image_size - PATCH_SIZE + 1, stride):
-                coords = torch.tensor([[x_start / (image_size - PATCH_SIZE),
-                                        y_start / (image_size - PATCH_SIZE)]]).to(device).float()
+    # --- COLUMN 3: Generate the Predicted Image (ODE Solve) ---
+    # Start from pure noise
+    x_hat = torch.randn_like(images)
+    dt = 1.0 / steps
 
-                x0 = global_noise[:, :, y_start:y_start + PATCH_SIZE, x_start:x_start + PATCH_SIZE].reshape(1, -1)
+    for s in range(steps):
+        # Time goes from 1 (noise) to 0 (clean)
+        t = torch.ones(B, 1).to(device) * (1.0 - s * dt)
 
-                xt = x0
-                dt = 1.0 / steps
-                for s in range(steps):
-                    t = torch.ones(1, 1).to(device) * (s / steps)
-                    vt = model(xt, t, coords, label_val)
-                    xt = xt + vt * dt
+        # Predict velocity
+        vt = model(x_hat, t, labels)
 
-                patch = xt.view(PATCH_SIZE, PATCH_SIZE) * mask
-                canvas[y_start:y_start + PATCH_SIZE, x_start:x_start + PATCH_SIZE] += patch
-                counts[y_start:y_start + PATCH_SIZE, x_start:x_start + PATCH_SIZE] += mask
+        # Euler step: x_{t-dt} = x_t - vt * dt
+        x_hat = x_hat - vt * dt
 
-        full_img = canvas / (counts + 1e-8)
-        ax = axes[idx // 3, idx % 3]
-        ax.imshow(full_img.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-        ax.set_title(f"Class: {label_val.item()}")
+    # --- Plotting ---
+    for i in range(n_rows):
+        # Col 1: Ground Truth
+        axes[i, 0].imshow(images[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
+        axes[i, 0].set_title("Ground Truth")
+
+        # Col 2: The Patch (Observation)
+        axes[i, 1].imshow(patch_images[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
+        axes[i, 1].set_title(f"Patch (y) at {x_idx[i].item()},{y_idx[i].item()}")
+
+        # Col 3: Model Prediction
+        axes[i, 2].imshow(x_hat[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
+        axes[i, 2].set_title("Generated X")
+
+    for ax in axes.flatten():
         ax.axis('off')
 
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
+
+
+def f_project(X, config):
+    """
+    X: Full image [B, 1, 28, 28]
+    Returns: The patch [B, patch_size*patch_size]
+    """
+    B = X.shape[0]
+    max_off = image_size - config.patch_size
+    x_idx = torch.randint(0, max_off + 1, (B,))
+    y_idx = torch.randint(0, max_off + 1, (B,))
+
+    patches = []
+    for i in range(B):
+        patch = X[i, 0, y_idx[i]:y_idx[i] + config.patch_size, x_idx[i]:x_idx[i] + config.patch_size]
+        patches.append(patch.reshape(-1))
+    return torch.stack(patches)
 
 
 def get_args():
@@ -74,6 +102,9 @@ def get_args():
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--lr', type=float, default=5e-4)
     parser.add_argument('--lr_factor', type=float, default=0.1)
+    # --- ADD THESE TO YOUR get_args() function ---
+    parser.add_argument('--guide_steps', type=int, default=10, help="Steps for guided sampling")
+    parser.add_argument('--eta', type=float, default=0.1, help="Guidance scale (GPS strength)")
 
     parser.add_argument('--fm_steps', type=int, default=64)
     parser.add_argument('--class_range', type=int, nargs='*', default=[0, 10])
@@ -88,7 +119,7 @@ if __name__ == "__main__":
     # 1. Directory Setup
     if config.mode == 'train':
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        run_dir = os.path.join("outputs", f"experiment_mnist_patch{config.patch_size}_overlap{config.overlap}_{timestamp}")
+        run_dir = os.path.join("outputs", f"experiment_mnist_patch{config.patch_size}_{timestamp}")
         os.makedirs(run_dir, exist_ok=True)
     else:
         if config.ckpt_path is None:
@@ -100,7 +131,7 @@ if __name__ == "__main__":
     # 2. Data & Model Setup
     dataset = EMNIST(train=(config.mode == 'train'), class_range=config.class_range, device=device)
     loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True)
-    model = PatchFlowModel(patch_size=config.patch_size, num_classes=dataset.num_classes).to(device)
+    model = FullImageFlowModel(num_classes=dataset.num_classes).to(device)
 
     if config.ckpt_path:
         print(f"Loading checkpoint from {config.ckpt_path}")
@@ -112,36 +143,82 @@ if __name__ == "__main__":
         print("Running Evaluation...")
         # Add a unique suffix so we don't overwrite training images
         timestamp_eval = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        out_name = f"eval_overlap_{config.overlap}_{timestamp_eval}.png"
+        out_name = f"eval_{timestamp_eval}.png"
 
-        visualize_grid(model, 0, dataset.num_classes, os.path.join(run_dir, out_name),
-                       config.fm_steps, config.patch_size, device, overlap=config.overlap)
+        visualize_grid(model, loader, out_name, steps=config.guide_steps,
+                       patch_size=config.patch_size, device=device)
         print(f"Evaluation image saved to: {os.path.join(run_dir, out_name)}")
 
-    # --- TRAINING MODE ---
+    # --- TRAINING MODE (IGFM) ---
     else:
         optimizer = optim.Adam(model.parameters(), lr=config.lr)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.n_epochs, eta_min=config.lr * config.lr_factor)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.n_epochs,
+                                                         eta_min=config.lr * config.lr_factor)
 
         for epoch in range(config.n_epochs):
             model.train()
             total_loss = 0
+
             for images, labels in loader:
                 B = images.shape[0]
-                max_off = image_size - config.patch_size
-                x_idx, y_idx = torch.randint(0, max_off + 1, (B,)), torch.randint(0, max_off + 1, (B,))
+                images, labels = images.to(device), labels.to(device)
 
-                all_p = images.unfold(2, config.patch_size, 1).unfold(3, config.patch_size, 1)
-                patches = all_p[torch.arange(B), 0, y_idx, x_idx].reshape(B, -1).to(device)
-                coords = torch.stack([x_idx.float() / max_off, y_idx.float() / max_off], dim=1).to(device)
+                # 1. Prepare the Observation (y)
+                y_obs = f_project(images, config) # [B, patch_size*patch_size]
 
-                x0, x1 = torch.randn_like(patches), patches
-                t = torch.rand(B, 1).to(device)
-                xt = (1 - t) * x0 + t * x1
+                # --- PHASE 1: GUIDED SAMPLING ---
+                model.eval()
+                with torch.no_grad():
+                    # Start with a full-size noise canvas X [B, 1, 28, 28]
+                    x_hat = torch.randn(B, 1, image_size, image_size).to(device)
+                    dt = 1.0 / config.guide_steps
+
+                    for s in range(config.guide_steps):
+                        t_curr = torch.ones(B, 1).to(device) * (1.0 - s * dt)
+
+                        # 1. Prior Step: What does the model think the FULL image looks like?
+                        # Note: If your model is patch-based, you'd apply it across the image here
+                        vt = model(x_hat, t_curr, labels)
+                        x_hat = x_hat - vt * dt
+
+                        # 2. Guidance Step: The GPS
+                        # Force the part of x_hat at (y_idx, x_idx) to match the real y_obs
+                        with torch.enable_grad():
+                            x_hat.requires_grad_(True)
+                            # We project the hallucinated FULL image down to the patch
+                            prediction_y = f_project(x_hat, config)
+
+                            # Loss is only calculated on the observable part (the patch)
+                            guidance_loss = torch.sum((prediction_y - y_obs) ** 2)
+
+                            # Gradient is backpropagated to the FULL image x_hat
+                            grad = torch.autograd.grad(guidance_loss, x_hat)[0]
+
+                            # Nudge the FULL image. Only the pixels in the patch area
+                            # will have non-zero gradients!
+                            x_hat = x_hat.detach() - config.eta * grad
+
+                # --- PHASE 2: FLOW MATCHING (The "Study") ---
+                model.train()
+                # The model now trains to generate the FULL image it just hallucinated
+                x1 = x_hat.detach()
+                x0 = torch.randn_like(x1)
+                # 1. Reshape t for broadcasting: [B] -> [B, 1, 1, 1]
+                t = torch.rand(B, device=device).unsqueeze(-1)
+                t_view = t.view(B, 1, 1, 1)
+
+                # 2. Standard Flow: xt = (1 - t)*x1 + t*x0
+                # At t=0, xt = x1 (Clean)
+                # At t=1, xt = x0 (Noise)
+                xt = (1 - t_view) * x1 + t_view * x0
+
+                # 3. Target Velocity: The vector pointing FROM Noise TO Image
+                # Since we are solving from t=1 down to t=0:
                 ut = x1 - x0
 
-                vt = model(xt, t, coords, labels)
-                loss = torch.mean((vt - ut) ** 2)
+                # 4. Training Loss
+                vt_pred = model(xt, t, labels)
+                loss = torch.mean((vt_pred - ut) ** 2)
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -150,16 +227,12 @@ if __name__ == "__main__":
 
             scheduler.step()
             avg_loss = total_loss / len(loader)
-            print(f"Epoch {epoch + 1:03d} | Loss: {avg_loss:.6f} | LR: {optimizer.param_groups[0]['lr']:.2e}")
+            print(f"Epoch {epoch + 1:03d} | Loss: {avg_loss:.6f}")
 
             if (epoch + 1) % config.vis_every == 0:
-                # Save Visualization
                 img_path = os.path.join(run_dir, f"epoch_{epoch + 1:03d}.png")
-                visualize_grid(model, epoch + 1, dataset.num_classes, img_path,
-                               config.fm_steps, config.patch_size, device, overlap=config.overlap)
-
-                # Save Checkpoint
-                ckpt_path = os.path.join(run_dir, "last_model.pt")
-                torch.save(model.state_dict(), ckpt_path)
+                visualize_grid(model, loader, img_path, steps=config.guide_steps,
+                               patch_size=config.patch_size, device=device)
+                torch.save(model.state_dict(), os.path.join(run_dir, "last_model.pt"))
 
         print(f"Results saved to: {run_dir}")

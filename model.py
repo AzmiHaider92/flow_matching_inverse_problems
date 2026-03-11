@@ -31,37 +31,40 @@ class ResBlock(nn.Module):
         return x + self.net(x)
 
 
-class PatchFlowModel(nn.Module):
-    def __init__(self, patch_size=7, cond_dim=512, num_classes=10):
+class FullImageFlowModel(nn.Module):
+    def __init__(self, cond_dim=512, num_classes=10):
         super().__init__()
-        self.patch_dim = patch_size * patch_size
-
-        # Embeddings (Keep your Fourier scale at 20.0 as you have it)
+        # Embeddings for class and time
         self.class_emb = nn.Embedding(num_classes, cond_dim)
-        self.pos_emb = FourierEmbedding(2, 128, scale=20.0)
         self.time_emb = FourierEmbedding(1, 64, scale=20.0)
 
-        self.meta_net = nn.Sequential(
-            nn.Linear(cond_dim + 128 + 64, cond_dim),
-            nn.SiLU()
+        # Projection for conditioning
+        self.cond_proj = nn.Linear(cond_dim + 64, 128)
+
+        # A simple Convolutional Encoder-Decoder (No patches!)
+        self.net = nn.Sequential(
+            nn.Conv2d(1 + 1, 64, kernel_size=3, padding=1),  # +1 for time/cond channel
+            nn.SiLU(),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(64, 1, kernel_size=3, padding=1)  # Output velocity [B, 1, 28, 28]
         )
 
-        # Deeper backbone with Skip Connections
-        self.in_layer = nn.Linear(self.patch_dim + cond_dim, 512)
-        self.blocks = nn.Sequential(
-            ResBlock(512),
-            ResBlock(512)
-        )
-        self.out_layer = nn.Linear(512, self.patch_dim)
-        self.act = nn.SiLU()
+    def forward(self, x_t, t, labels):
+        # x_t: [B, 1, 28, 28]
+        B, C, H, W = x_t.shape
 
-    def forward(self, x_t, t, coords, labels):
+        # Merge conditioning into a spatial map
         c_e = self.class_emb(labels)
-        p_e = self.pos_emb(coords)
         t_e = self.time_emb(t)
+        cond = self.cond_proj(torch.cat([c_e, t_e], dim=-1))  # [B, 128]
 
-        meta = self.meta_net(torch.cat([c_e, p_e, t_e], dim=-1))
+        # Broadcast conditioning to match image size [B, 1, 28, 28]
+        cond_map = cond[:, :1].view(B, 1, 1, 1).expand(B, 1, H, W)
 
-        h = self.act(self.in_layer(torch.cat([x_t, meta], dim=-1)))
-        h = self.blocks(h)
-        return self.out_layer(h)
+        # Concatenate image and condition channel
+        input_tensor = torch.cat([x_t, cond_map], dim=1)
+
+        return self.net(input_tensor)
