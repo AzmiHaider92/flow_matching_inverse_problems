@@ -26,7 +26,7 @@ def get_args():
     parser.add_argument('--guide_steps', type=int, default=10, help="Steps for guided sampling")
     parser.add_argument('--eta', type=float, default=0.1, help="Guidance scale (GPS strength)")
 
-    parser.add_argument('--fm_steps', type=int, default=32)
+    parser.add_argument('--fm_steps', type=int, default=100)
     parser.add_argument('--class_range', type=int, nargs='*', default=[0, 10])
     parser.add_argument('--overlap', action='store_true', help="Use overlapping patches in visualization")
     return parser.parse_args()
@@ -67,66 +67,59 @@ def get_cfg_velocity(model, x, t, labels, cfg_scale=3.0, null_label=10):
 def visualize_grid(model, loader, output_path, config, device='cpu'):
     model.eval()
     n_rows = 4
-    # Columns: GT, Patch, Prior Check (CFG), Dream 1, Dream 2, Dream 3
-    fig, axes = plt.subplots(n_rows, 6, figsize=(20, 12))
-
+    fig, axes = plt.subplots(n_rows, 6, figsize=(20, 10))
     images, labels = next(iter(loader))
     images, labels = images[:n_rows].to(device), labels[:n_rows].to(device)
     B = images.shape[0]
 
-    # 1. Get Patch Info
     y_idx, x_idx = get_foreground_indices(images, config.patch_size)
     y_obs = f_project(images, y_idx, x_idx, config.patch_size)
 
-    # Column 2 Viz: The Masked Input
+    # Col 1: GT | Col 2: Patch Viz
     patch_viz = torch.zeros_like(images)
     for i in range(B):
         patch_viz[i, 0, y_idx[i]:y_idx[i] + config.patch_size, x_idx[i]:x_idx[i] + config.patch_size] = \
             y_obs[i].view(config.patch_size, config.patch_size)
 
-    # Column 3: Prior Check (Pure CFG, No Patch)
+    # Col 3: Prior Check (Standard CFG on GT Label)
     x_prior = torch.randn_like(images)
     dt = 1.0 / config.fm_steps
     for s in range(config.fm_steps):
         t = torch.ones(B, 1, device=device) * (s * dt)
-        x_prior = x_prior + get_cfg_velocity(model, x_prior, t, labels, cfg_scale=3.0) * dt
+        x_prior = x_prior + get_cfg_velocity(model, x_prior, t, labels, cfg_scale=4.0) * dt
 
-    # Columns 4, 5, 6: Different Digits for the same patch
-    # We use null_labels (10) to let the model decide the digit
-    null_labels = torch.full_like(labels, 10)
-
+    # Col 4, 5, 6: Diversity Dreams (Null Label 10 + Random Start)
     dream_results = []
-    for _ in range(3):  # Generate 3 variations
-        x_dream = torch.randn_like(images)  # New random noise for each dream
-        dt_g = 1.0 / config.fm_steps
-
+    null_labels = torch.full_like(labels, 10)
+    for _ in range(3):
+        x_dream = torch.randn_like(images)
         for s in range(config.fm_steps):
-            t = torch.ones(B, 1, device=device) * (s * dt_g)
-            # Use CFG=0 (Unconditional) to allow for multiple digit types
-            vt = model(x_dream, t, null_labels)
-            x_dream = x_dream + vt * dt_g
+            t_val = s / config.fm_steps
+            t = torch.ones(B, 1, device=device) * t_val
 
-            # GPS Guidance to anchor to the patch
+            # Use the NULL label to allow the model to choose its own digit path
+            vt = model(x_dream, t, null_labels)
+            x_dream = x_dream + vt * dt
+
+            # ANNEALED GUIDANCE: Strong at start, zero at end to stop "hairs"
+            current_eta = config.eta * (1.0 - t_val)
             with torch.enable_grad():
                 x_dream.requires_grad_(True)
                 y_hat = f_project(x_dream, y_idx, x_idx, config.patch_size)
                 loss_g = F.mse_loss(y_hat, y_obs) * 0.5 * (config.patch_size ** 2)
                 grad = torch.autograd.grad(loss_g, x_dream)[0]
-                x_dream = x_dream.detach() - config.eta * grad
+                x_dream = x_dream.detach() - current_eta * grad
         dream_results.append(x_dream)
 
-    # --- Plotting ---
-    imgs = [images, patch_viz, x_prior] + dream_results
-    titles = ["GT", "Patch", "Prior", "Guided1", "Guided2", "Guided3"]
-
+    imgs = [images, patch_viz] + dream_results + [x_prior]
+    titles = ["GT", "Patch", "S1", "S2", "S3", "Prior"]
     for r in range(n_rows):
         for c in range(6):
             axes[r, c].imshow(imgs[c][r, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-            if r == 0: axes[r, c].set_title(titles[c], fontsize=10)
+            if r == 0: axes[r, c].set_title(titles[c])
             axes[r, c].axis('off')
-
     plt.tight_layout()
-    plt.savefig(output_path)
+    plt.savefig(output_path);
     plt.close()
 
 
@@ -188,20 +181,44 @@ if __name__ == "__main__":
                 y_idx, x_idx = get_foreground_indices(images, config.patch_size)
                 y_obs = f_project(images, y_idx, x_idx, config.patch_size)
 
-                # PHASE 1: Dream (Use real labels for dreaming)
+                # PHASE 1: Dream (Stable & Annealed)
                 model.eval()
                 with torch.no_grad():
                     x_hat = torch.randn_like(images)
                     dt = 1.0 / config.guide_steps
                     for s in range(config.guide_steps):
-                        t_c = torch.ones(B, 1, device=device) * (s * dt)
+                        t_val = s * dt
+                        t_c = torch.ones(B, 1, device=device) * t_val
+
+                        # 1. Base Velocity Step
                         x_hat = x_hat + model(x_hat, t_c, labels) * dt
+
+                        # 2. Guidance Step
                         with torch.enable_grad():
                             x_hat.requires_grad_(True)
                             y_h = f_project(x_hat, y_idx, x_idx, config.patch_size)
-                            g_loss = torch.sum((y_h - y_obs) ** 2)
+
+                            # Use Mean (MSE) for 7x7—it's much more stable than Sum
+                            g_loss = F.mse_loss(y_h, y_obs)
                             grad = torch.autograd.grad(g_loss, x_hat)[0]
-                            x_hat = x_hat.detach() - config.eta * grad
+
+                            # --- STABILIZATION: The Normalization ---
+                            # Calculate the 'length' of the gradient vector
+                            grad_norm = torch.norm(grad)
+                            if grad_norm > 1e-8:
+                                # Turn the gradient into a pure direction (length 1.0)
+                                grad = grad / grad_norm
+
+                                # --- ANNEALING: Fade out pull as digit forms ---
+                            # Strong at t=0, zero at t=1
+                            current_eta = config.eta * (1.0 - t_val)
+
+                            # Apply the controlled step
+                            x_hat = x_hat.detach() - current_eta * grad
+
+                            # --- SAFETY RAIL ---
+                            # Prevent pixel values from spiraling to infinity
+                            x_hat = torch.clamp(x_hat, -5.0, 5.0)
 
                 # PHASE 2: Train with CFG Labels
                 model.train()
@@ -222,7 +239,7 @@ if __name__ == "__main__":
             avg_loss = total_loss / len(loader)
             current_lr = optimizer.param_groups[0]['lr']
             print(f"Epoch {epoch + 1:03d} | Loss: {avg_loss:.6f} | LR: {current_lr:.2e}")
-            
+
             if (epoch + 1) % config.vis_every == 0:
                 visualize_grid(model, loader, os.path.join(run_dir, f"epoch_{epoch + 1}.png"), config, device)
                 print(f"Eval saved to: {run_dir}")
