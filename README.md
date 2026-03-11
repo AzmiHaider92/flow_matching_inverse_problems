@@ -46,7 +46,7 @@ By repeating these two phases, the model experiences a "self-correction" loop.In
 
 To achieve both diversity and high visual fidelity, the model implements CFG:Label Dropout: During training, 10% of class labels are replaced with a "null" token (Index 10).
 - Sampling: At inference, the model extrapolates between the unconditional (null) prediction and the conditional prediction: <br>
-  <p align="center">$v_{cfg} = v_{uncond} + \text{cfg_scale} \cdot (v_{cond} - v_{uncond})$</p>
+  <p align="center">$v_{cfg} = v_{uncond} + \text{cfg\_scale} \cdot (v_{cond} - v_{uncond})$</p>
 - Result: High CFG scales (3.0+) produce sharp, prototypical digit shapes, while the null token allows the model to explore multiple digit classes that could realistically fit the provided patch.
 
 
