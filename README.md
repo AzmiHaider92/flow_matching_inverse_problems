@@ -33,7 +33,7 @@ Goal: Update the model $v_\theta$ to treat the generated $\hat{X}$ as the new gr
 2. Construct Noisy State ($X_t$): Create an interpolation between the reconstructed image $\hat{X}$ and a new noise sample $X_0$: <br>
    <p align="center">$X_t = (1-t) X_0 + t \hat{X}$</p>
 3. Define Target Velocity: The ideal vector $u$ that maps the noise back to the image is: <br>
-<p align="center">$u = \hat{X} - X_1 $</p>
+<p align="center">$u = \hat{X} - X_0 $</p>
 4. Optimize: Update the weights of the velocity network by minimizing the Flow Matching objective: <br>
 <p align="center">$\mathcal{L} = \|v_\theta(X_t, t) - u\|^2_2$</p>
 
