@@ -25,14 +25,14 @@ def get_args():
     # --- ADD THESE TO YOUR get_args() function ---
     parser.add_argument('--guide_steps', type=int, default=10, help="Steps for guided sampling")
     parser.add_argument('--eta', type=float, default=0.1, help="Guidance scale (GPS strength)")
-
+    parser.add_argument('--consistent_projection', type=bool, default=False, help="if True, patch projection uses seed")
     parser.add_argument('--fm_steps', type=int, default=100)
     parser.add_argument('--class_range', type=int, nargs='*', default=[0, 10])
     parser.add_argument('--overlap', action='store_true', help="Use overlapping patches in visualization")
     return parser.parse_args()
 
 
-def get_foreground_indices(images, patch_size):
+def get_random_foreground_indices(images, patch_size):
     B, _, H, W = images.shape
     device = images.device
     mask = (images.view(B, -1) > 0.1).float()
@@ -45,6 +45,43 @@ def get_foreground_indices(images, patch_size):
     y_idx = torch.clamp(py + off_y, 0, H - patch_size)
     x_idx = torch.clamp(px + off_x, 0, W - patch_size)
     return y_idx.long(), x_idx.long()
+
+
+def get_consistent_foreground_indices(images, patch_size):
+    B, _, H, W = images.shape
+    device = images.device
+
+    y_idxs = []
+    x_idxs = []
+
+    for i in range(B):
+        # Create a deterministic seed based on the image content
+        # We use a large prime and the sum to create a pseudo-unique seed
+        seed = int(torch.sum(images[i] * 1000).item()) % (2 ** 32)
+        gen = torch.Generator(device=device).manual_seed(seed)
+
+        mask = (images[i].view(-1) > 0.1).float()
+
+        # Pick foreground pixels using the seeded generator
+        idx = torch.multinomial(mask + 1e-8, 1, generator=gen).item()
+        py, px = idx // W, idx % W
+
+        # Add "random" offsets using the same seeded generator
+        off_y = torch.randint(-patch_size + 1, 1, (1,), device=device, generator=gen).item()
+        off_x = torch.randint(-patch_size + 1, 1, (1,), device=device, generator=gen).item()
+
+        y_idxs.append(max(0, min(py + off_y, H - patch_size)))
+        x_idxs.append(max(0, min(px + off_x, W - patch_size)))
+
+    return torch.tensor(y_idxs, device=device).long(), torch.tensor(x_idxs, device=device).long()
+
+
+def get_foreground_indices(images, patch_size, consistent_projection=False):
+    if consistent_projection:
+        y_idxs, x_idxs = get_consistent_foreground_indices(images, patch_size)
+    else:
+        y_idxs, x_idxs = get_random_foreground_indices(images, patch_size)
+    return y_idxs, x_idxs
 
 
 def f_project(X, y_idx, x_idx, patch_size):
@@ -72,7 +109,7 @@ def visualize_grid(model, loader, output_path, config, device='cpu'):
     images, labels = images[:n_rows].to(device), labels[:n_rows].to(device)
     B = images.shape[0]
 
-    y_idx, x_idx = get_foreground_indices(images, config.patch_size)
+    y_idx, x_idx = get_foreground_indices(images, config.patch_size, config.consistent_projection)
     y_obs = f_project(images, y_idx, x_idx, config.patch_size)
 
     # Col 1: GT | Col 2: Patch Viz
@@ -130,7 +167,8 @@ if __name__ == "__main__":
     # 1. Directory Setup
     if config.mode == 'train':
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        run_dir = os.path.join("outputs", f"experiment_mnist_patch{config.patch_size}_{timestamp}")
+        c = "C" if config.consistent_projection else ""
+        run_dir = os.path.join("outputs", f"experiment_mnist_patch{config.patch_size}{c}_{timestamp}")
         os.makedirs(run_dir, exist_ok=True)
     else:
         if config.ckpt_path is None:
@@ -178,7 +216,7 @@ if __name__ == "__main__":
                 train_labels = torch.where(drop_mask, torch.tensor(10, device=device), labels)
 
                 # IGFM Indices
-                y_idx, x_idx = get_foreground_indices(images, config.patch_size)
+                y_idx, x_idx = get_foreground_indices(images, config.patch_size, config.consistent_projection)
                 y_obs = f_project(images, y_idx, x_idx, config.patch_size)
 
                 # PHASE 1: Dream (Use real labels for dreaming)
