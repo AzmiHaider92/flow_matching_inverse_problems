@@ -17,23 +17,23 @@ The algorithm alternates between a Sampling Phase (Inference) and a Learning Pha
 ### Phase 1: Guided Sampling (The "E-Step")
 Goal: Generate a "full" pseudo-image $\hat{X}$ that is consistent with the observed crop $y$.
 1. Initialize: Start with a latent state of pure Gaussian noise $X_1 \sim \mathcal{N}(0, I)$.
-2. Solve the ODE (Backwards $t=1 \to t=0$): <br>
+2. Solve the ODE (Backwards $t=0 \to t=1$): <br>
    For each discrete timestep $t$ in the ODE trajectory:
    - Predict Velocity: Compute the current velocity using the model: <br><p align="center">$v = v_\theta(X_t, t)$</p>
-   - Step Toward Data: Move the current state toward the clean manifold: <br> <p align="center">$X_{t-\Delta t} = X_t - \Delta t \cdot v$</p>
+   - Step Toward Data: Move the current state toward the clean manifold: <br> <p align="center">$X_{t+\Delta t} = X_t + \Delta t \cdot v$</p>
    - Apply Manifold Guidance: Correct the trajectory so the cropped region matches the real observation $y$ using the gradient of the forward loss: <br>
    <p align="center">$X_{t-\Delta t} = X_{t-\Delta t} - \eta \nabla_{X} \|f(X_{t-\Delta t}) - y\|^2_2$</p>  <br>
    (Where $\eta$ is the guidance scale/step size).
-4. Final Result: At $t=0$, we obtain a reconstructed candidate $\hat{X}$ that satisfies the physical constraint $f(\hat{X}) \approx y$.
+4. Final Result: At $t=1$, we obtain a reconstructed candidate $\hat{X}$ that satisfies the physical constraint $f(\hat{X}) \approx y$.
 
 ### Phase 2: Flow Matching (The "M-Step")
 
 Goal: Update the model $v_\theta$ to treat the generated $\hat{X}$ as the new ground truth.
 1. Sample Time: Select a random timestep $t \in [0, 1]$.
-2. Construct Noisy State ($X_t$): Create an interpolation between the reconstructed image $\hat{X}$ and a new noise sample $X_1$: <br>
-   <p align="center">$X_t = (1-t)\hat{X} + t X_1$</p>
+2. Construct Noisy State ($X_t$): Create an interpolation between the reconstructed image $\hat{X}$ and a new noise sample $X_0$: <br>
+   <p align="center">$X_t = (1-t) X_0 + t \hat{X}$</p>
 3. Define Target Velocity: The ideal vector $u$ that maps the noise back to the image is: <br>
-<p align="center">$u = X_1 - \hat{X}$</p>
+<p align="center">$u = \hat{X} - X_0 $</p>
 4. Optimize: Update the weights of the velocity network by minimizing the Flow Matching objective: <br>
 <p align="center">$\mathcal{L} = \|v_\theta(X_t, t) - u\|^2_2$</p>
 
