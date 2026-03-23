@@ -114,12 +114,13 @@ if __name__ == "__main__":
                             x_hat.requires_grad_(True)
                             if config.proj == 'patch':
                                 y_h = f_project(x_hat, y_idx, x_idx, config.patch_size)
-                                g_loss = torch.sum((y_h - y_obs) ** 2)
+                                #g_loss = torch.sum((y_h - y_obs) ** 2)
                             else:
                                 # Use the SAME A_batch that was generated for the GT images
                                 y_h = f_random_batch_projection(x_hat, A_batch)
-                                g_loss = F.mse_loss(y_h, y_obs) * 100.0
+                                #g_loss = F.mse_loss(y_h, y_obs) * 100.0
 
+                            g_loss = torch.sum((y_h - y_obs) ** 2)
                             grad = torch.autograd.grad(g_loss, x_hat)[0]
                             x_hat = x_hat.detach() - config.eta * grad
 
@@ -143,6 +144,7 @@ if __name__ == "__main__":
 
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 total_loss += loss.item()
                 model.train()
