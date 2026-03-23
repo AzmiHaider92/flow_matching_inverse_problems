@@ -87,11 +87,11 @@ def visualize_grid_random_proj(model, loader, output_path, config, device='cpu')
             vt = model(x_dream, t, null_labels)
             x_dream = x_dream + vt * dt
 
-            current_eta = config.eta * (1.0 - t_val)
+            current_eta = config.eta * (1.0 - 0.7 * t_val)
             with torch.enable_grad():
                 x_dream.requires_grad_(True)
                 y_hat = f_random_batch_projection(x_dream, A_batch)
-                loss_g = F.mse_loss(y_hat, y_obs) * 100.0
+                loss_g = F.mse_loss(y_hat, y_obs)
                 grad = torch.autograd.grad(loss_g, x_dream)[0]
                 x_dream = x_dream.detach() - current_eta * grad
         dream_results.append(x_dream)
@@ -105,7 +105,7 @@ def visualize_grid_random_proj(model, loader, output_path, config, device='cpu')
     error_map = torch.abs(images - dream_results[0])
 
     imgs = [images, error_map] + dream_results + [x_prior]
-    titles = ["GT", "Error (GT vs S1)", "S1", "S2", "S3", "Prior"]
+    titles = ["GT", "error (GT-S1)", "S1", "S2", "S3", "Prior"]
 
     for r in range(n_rows):
         for c in range(6):
