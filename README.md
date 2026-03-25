@@ -86,8 +86,9 @@ For every image $x \in \mathbb{R}^{784}$ in the EMNIST dataset, we generate a un
 
 To enable the random projection mode instead of the default spatial patch, use the following flags:
 
---proj random: Switches the projection function $f(x)$ from a local spatial patch to a global random matrix $A$.
---n_measurements 256: Sets the dimensionality of the measurement vector $y$.
+'''
+--proj random: Switches the projection function $f(x)$ from a local spatial patch to a global random matrix $A$. <br>
+--n_measurements 256: Sets the dimensionality of the measurement vector $y$. <br>
 
 <p align="center">
   <img src="eval_random256.png" alt="randomproj" width="800px"/>
