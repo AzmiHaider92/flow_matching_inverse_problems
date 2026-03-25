@@ -78,3 +78,12 @@ A third completion, further demonstrating the multimodal nature of the IGFM algo
 Prior: A reconstruction using full Classifier-Free Guidance (CFG) on the ground-truth label. This verifies the model's peak performance and structural integrity for the known class.
 
 
+
+## A random guidance
+
+In this version of the model, we replace the spatial patch constraint with a global random projection (Compressed Sensing). Instead of forcing the model to reconstruct a specific $7 \times 7$ square of the image, we are now using a unique, high-dimensional "fingerprint" for every image in the dataset.
+
+For every image $x \in \mathbb{R}^{784}$ in the EMNIST dataset, we generate a unique, deterministic random matrix $A_i \in \mathbb{R}^{784 \times 256}$. The measurement $y$ is calculated as: $y_i = A_i^\top x_i$
+
+
+
