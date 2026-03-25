@@ -91,7 +91,8 @@ def visualize_grid_random_proj(model, loader, output_path, config, device='cpu')
             with torch.enable_grad():
                 x_dream.requires_grad_(True)
                 y_hat = f_random_batch_projection(x_dream, A_batch)
-                loss_g = F.mse_loss(y_hat, y_obs)
+                loss_g = torch.sum((y_hat - y_obs) ** 2)
+                #loss_g = F.mse_loss(y_hat, y_obs)
                 grad = torch.autograd.grad(loss_g, x_dream)[0]
                 x_dream = x_dream.detach() - current_eta * grad
         dream_results.append(x_dream)
