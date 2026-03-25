@@ -81,9 +81,17 @@ Prior: A reconstruction using full Classifier-Free Guidance (CFG) on the ground-
 
 ## A random guidance
 
-In this version of the model, we replace the spatial patch constraint with a global random projection (Compressed Sensing). Instead of forcing the model to reconstruct a specific $7 \times 7$ square of the image, we are now using a unique, high-dimensional "fingerprint" for every image in the dataset.
+In this version of the model, we replace the spatial patch constraint with a global random projection (Compressed Sensing).
+For every image $x \in \mathbb{R}^{784}$ in the EMNIST dataset, we generate a unique, deterministic random matrix $A_i \in \mathbb{R}^{784 \times 256}$. The measurement $y$ is calculated as $y_i = A_i^\top x_i$.
 
-For every image $x \in \mathbb{R}^{784}$ in the EMNIST dataset, we generate a unique, deterministic random matrix $A_i \in \mathbb{R}^{784 \times 256}$. The measurement $y$ is calculated as: $y_i = A_i^\top x_i$
+To enable the random projection mode instead of the default spatial patch, use the following flags:
+
+--proj random: Switches the projection function $f(x)$ from a local spatial patch to a global random matrix $A$.
+--n_measurements 256: Sets the dimensionality of the measurement vector $y$.
+
+<p align="center">
+  <img src="eval_random256.png" alt="randomproj" width="800px"/>
+</p
 
 
 
