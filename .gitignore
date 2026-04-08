@@ -3,5 +3,11 @@ datasets/
 outputs/
 __pycache__/
 *.pyc
+*.iml
+*.xml
 .ipynb_checkpoints/
 .idea/
+.idea/*
+data/
+lightning_logs/
+mnist_flow_checkpoints/
