@@ -3,17 +3,19 @@ import os
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-import wandb
 from model_mnist import ImageFlow
+import wandb
 
 
 def main(args):
     if args.use_wandb:
         wandb.init(
+            entity="viewformer",
+            # Set the wandb project where this run will be logged.
             project="mnist-flow-matching",
-            name=args.run_name,
+            # Track hyperparameters and run metadata.
             config=vars(args),
-            save_code=True
+            name=args.run_name,
         )
 
     model = ImageFlow(
