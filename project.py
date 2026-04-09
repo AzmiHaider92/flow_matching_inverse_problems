@@ -105,14 +105,16 @@ def get_batch_unique_matrices(images, n_measurements):
     return torch.stack(A_batch)  # (B, 784, M)
 
 
-def f_random_batch_projection(X, A_batch):
+def f_random_batch_projection(X, A_batch, noise_std=1e-3):
     """
     X: (B, 1, 28, 28)
     A_batch: (B, 784, M)
-    Returns y: (B, M) where y[i] = X[i]_flat @ A_batch[i]
+    Returns y: (B, M) where y[i] = X[i]_flat @ A_batch[i] + noise
     """
     B = X.shape[0]
     x_flat = X.view(B, 1, -1)  # (B, 1, 784)
     # Batch matrix multiplication: (B, 1, 784) @ (B, 784, M) -> (B, 1, M)
     y = torch.bmm(x_flat, A_batch)
-    return y.squeeze(1)  # (B, M)
+    y = y.squeeze(1)  # (B, M)
+    y = y + noise_std * torch.randn_like(y)
+    return y

@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 import os
 from datetime import datetime
 import torch.nn.functional as F
+import wandb
 
 # Local imports
 from data import EMNIST
@@ -14,7 +15,7 @@ from project import (
     f_project,
     f_random_batch_projection, get_batch_unique_matrices
 )
-from visualize import visualize_grid
+from visualize import visualize_grid, log_guided_samples, log_flow_samples
 
 
 def get_args():
@@ -34,13 +35,14 @@ def get_args():
     parser.add_argument('--eta', type=float, default=0.1, help="Guidance scale (GPS strength)")
 
     # Projection Logic
-    parser.add_argument('--proj', type=str, default='patch', choices=['patch', 'random'],
+    parser.add_argument('--proj', type=str, default='random', choices=['patch', 'random'],
                         help='Projection type: spatial patch or random matrix')
     parser.add_argument('--patch_size', type=int, default=7)
     parser.add_argument('--consistent_patch', action='store_true', help="Seed patch selection by image content")
     parser.add_argument('--n_measurements', type=int, default=100, help="M for random projection")
 
     parser.add_argument('--class_range', type=int, nargs='*', default=[0, 10])
+    parser.add_argument('--wandb_project', type=str, default='IGFM', help="W&B project name")
     return parser.parse_args()
 
 
@@ -61,6 +63,9 @@ if __name__ == "__main__":
         if config.ckpt_path is None:
             raise ValueError("You must provide --ckpt_path in eval mode.")
         run_dir = os.path.dirname(config.ckpt_path)
+
+    # W&B Setup
+    wandb.init(project=config.wandb_project, name=full_expname, config=vars(config), dir=run_dir)
 
     # 2. Data & Model Setup
     dataset = EMNIST(train=(config.mode == 'train'), class_range=config.class_range, device=device)
@@ -166,11 +171,18 @@ if __name__ == "__main__":
             scheduler.step()
             avg_loss = total_loss / len(loader)
             print(f"Epoch {epoch + 1:03d} | Loss: {avg_loss:.6f} | LR: {optimizer.param_groups[0]['lr']:.2e}")
+            wandb.log({"train/loss": avg_loss, "train/lr": optimizer.param_groups[0]['lr'], "epoch": epoch + 1})
 
             if (epoch + 1) % config.vis_every == 0:
                 vis_path = os.path.join(run_dir, f"epoch_{epoch + 1}.png")
-                visualize_grid(model, loader, vis_path, config, device)
-                print(f"Eval saved to: {run_dir}")
+                metrics = visualize_grid(model, loader, vis_path, config, device)
+                if metrics:
+                    wandb.log({"eval/psnr": metrics["psnr"], "eval/ssim": metrics["ssim"], "epoch": epoch + 1})
+                wandb.log({"eval/grid": wandb.Image(vis_path), "epoch": epoch + 1})
+                print(f"Eval saved to: {run_dir} | PSNR: {metrics['psnr']:.2f} dB | SSIM: {metrics['ssim']:.4f}")
+                log_guided_samples(model, loader, config, device, n_samples=100, n_vis=10)
+                log_flow_samples(model, loader, config, device, n_samples=100)
                 torch.save(model.state_dict(), os.path.join(run_dir, "last_model.pt"))
 
+        wandb.finish()
         print(f"Training complete. Results in: {run_dir}")
