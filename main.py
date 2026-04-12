@@ -65,7 +65,14 @@ if __name__ == "__main__":
         run_dir = os.path.dirname(config.ckpt_path)
 
     # W&B Setup
-    wandb.init(project=config.wandb_project, name=full_expname, config=vars(config), dir=run_dir)
+    wandb.init(
+        entity="viewformer",
+        # Set the wandb project where this run will be logged.
+        project="mnist-flow-matching",
+        # Track hyperparameters and run metadata.
+        config=vars(config),
+        name=config.expname,
+    )
 
     # 2. Data & Model Setup
     dataset = EMNIST(train=(config.mode == 'train'), class_range=config.class_range, device=device)
