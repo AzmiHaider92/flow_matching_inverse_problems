@@ -6,3 +6,7 @@ __pycache__/
 .ipynb_checkpoints/
 .idea/
 EMNIST
+data/
+lightning_logs/
+mnist_flow_checkpoints/
+wandb/
