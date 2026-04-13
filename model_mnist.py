@@ -10,6 +10,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 #from loss import RenderingLoss
+from diffusion import create_diffusion
 
 
 class FourierEmbedding(nn.Module):
@@ -91,9 +92,12 @@ class ImageFlow(pl.LightningModule):
                  num_images=None, flow_model_path=None,
                  batch_size=128, fm_steps=100,
                  flow_train_epochs=10, warmup_epochs=5,
-                 latent_l1_weight=0.01):
+                 latent_l1_weight=0.01,
+                 use_consistent_latents=True, model_type='flow'):
         super().__init__()
         self.save_hyperparameters()
+        self.use_consistent_latents = use_consistent_latents
+        self.model_type = model_type
         self.dataset_name = dataset_name
         self.data_root = data_root
         self.flow_lr = flow_lr
@@ -130,8 +134,18 @@ class ImageFlow(pl.LightningModule):
         self.register_buffer('gt_observations', observations)
         self.register_buffer('gt_images', all_images)
 
-        # Learnable latent images (analogous to parametric_structures in model.py)
-        self.latent_images = nn.Parameter(torch.zeros(self.num_images, self.channels, self.img_size, self.img_size))
+        # Latent Management
+        if self.use_consistent_latents:
+            self.latent_images = nn.Parameter(torch.zeros(self.num_images, self.channels, self.img_size, self.img_size))
+        else:
+            # Fixed random noise that doesn't get gradients
+            random_latents = torch.randn(self.num_images, self.channels, self.img_size, self.img_size)
+            self.register_buffer('latent_images', random_latents)
+
+        # Diffusion Setup (Conditional)
+        if self.model_type == 'diffusion':
+            # Assuming you have a create_diffusion helper available
+            self.diffusion = create_diffusion(timestep_respacing="")
 
         self.flow_model = FullImageFlowModel(in_channels=self.channels, obs_dim=n_measurements)
         if flow_model_path and os.path.exists(flow_model_path):
@@ -145,6 +159,8 @@ class ImageFlow(pl.LightningModule):
 
         #self.render_loss_fn = RenderingLoss(loss_type=self.render_loss_type)
         self.indices_to_visualize = self._pick_viz_indices()
+
+
 
     def _wandb_log(self, data):
         if self.logger:
@@ -184,46 +200,69 @@ class ImageFlow(pl.LightningModule):
         return torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
     def configure_optimizers(self):
-        params = [{'params': [self.latent_images], 'lr': self.latent_lr}]
+        params = []
+        # Only optimize latents if "consistent" mode is ON
+        if self.use_consistent_latents:
+            params.append({'params': [self.latent_images], 'lr': self.latent_lr})
+
         if not self._flow_model_pretrained:
             params.append({'params': self.flow_model.parameters(), 'lr': self.flow_lr})
-        optimizer = torch.optim.Adam(params)
-        return optimizer
+
+        return torch.optim.Adam(params)
 
     def configure_gradient_clipping(self, optimizer, gradient_clip_val, gradient_clip_algorithm):
         self.clip_gradients(optimizer, gradient_clip_val=1.0, gradient_clip_algorithm='norm')
 
     def _train_flow_model_on_latents(self):
+        # Prepare model for training
         for param in self.flow_model.parameters():
             param.requires_grad = True
         self.flow_model.train()
 
+        # Create a local dataset of CURRENT latents and their corresponding measurements
         x1_all = self.latent_images.detach()
         obs_all = self.gt_observations.detach()
         dataset = torch.utils.data.TensorDataset(x1_all, obs_all)
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=64, shuffle=True)
 
         optimizer = torch.optim.Adam(self.flow_model.parameters(), lr=self.flow_lr)
+
         for epoch in range(self._flow_train_epochs):
             total_loss = 0.0
             for x1, obs in dataloader:
                 x1 = x1.to(self.device)
                 obs = obs.to(self.device)
                 B = x1.shape[0]
-                x0 = torch.randn_like(x1)
-                t = torch.rand(B, 1, device=self.device)
-                xt = (1 - t.view(B, 1, 1, 1)) * x0 + t.view(B, 1, 1, 1) * x1
-                ut = x1 - x0
-                vt_pred = self.flow_model(xt, t, obs)
-                loss = F.mse_loss(vt_pred, ut)
                 optimizer.zero_grad()
+
+                if self.model_type == 'flow':
+                    # --- Flow Matching Training Logic ---
+                    x0 = torch.randn_like(x1)
+                    t = torch.rand(B, 1, device=self.device)
+                    xt = (1 - t.view(B, 1, 1, 1)) * x0 + t.view(B, 1, 1, 1) * x1
+                    ut = x1 - x0
+                    vt_pred = self.flow_model(xt, t, obs)
+                    loss = F.mse_loss(vt_pred, ut)
+
+                else:
+                    # --- Diffusion Training Logic ---
+                    # We use the training_losses helper from your diffusion library
+                    t = torch.randint(0, self.diffusion.num_timesteps, (B,), device=self.device)
+                    loss_dict = self.diffusion.training_losses(
+                        self.flow_model, x1, t, model_kwargs={'obs': obs}
+                    )
+                    loss = loss_dict["loss"].mean()
+
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.flow_model.parameters(), 1.0)
                 optimizer.step()
                 total_loss += loss.item()
-            if (epoch + 1) % 5 == 0:
-                print(f"  Flow epoch {epoch+1}/{self._flow_train_epochs} loss={total_loss/len(dataloader):.4f}")
 
+            if (epoch + 1) % 5 == 0:
+                print(
+                    f"  [{self.model_type.upper()}] Epoch {epoch + 1}/{self._flow_train_epochs} Loss={total_loss / len(dataloader):.4f}")
+
+        # Set back to eval mode for guidance/sampling
         self.flow_model.eval()
         for param in self.flow_model.parameters():
             param.requires_grad = False
@@ -232,21 +271,61 @@ class ImageFlow(pl.LightningModule):
     @torch.no_grad()
     def _guided_sampling_batch(self, gt_obs, A_batch, B):
         self.flow_model.eval()
+
+        # Start from pure noise
         x = torch.randn(B, self.channels, self.img_size, self.img_size, device=self.device)
-        dt = 1.0 / self.guided_N
 
-        for step in range(self.guided_N):
-            t_c = torch.full((B, 1), step * dt, device=self.device)
-            x = x + self.flow_model(x, t_c, gt_obs) * dt
+        if self.model_type == 'flow':
+            # --- FLOW MATCHING REVERSE (ODE) ---
+            dt = 1.0 / self.guided_N
+            for step in range(self.guided_N):
+                t_c = torch.full((B, 1), step * dt, device=self.device)
+                # Standard Flow Step
+                v = self.flow_model(x, t_c, gt_obs)
+                x = x + v * dt
 
-            with torch.enable_grad():
-                x = x.detach().requires_grad_(True)
-                x_flat = x.view(B, -1)
-                y_hat = torch.bmm(x_flat.unsqueeze(1), A_batch).squeeze(1)
-                g_loss = torch.sum((y_hat - gt_obs) ** 2)
-                grad = torch.autograd.grad(g_loss, x)[0]
-                x = x.detach() - self.guided_eta * grad
+                # Measurement Guidance (DPS-style)
+                with torch.enable_grad():
+                    x = x.detach().requires_grad_(True)
+                    x_flat = x.view(B, -1)
+                    y_hat = torch.bmm(x_flat.unsqueeze(1), A_batch).squeeze(1)
+                    g_loss = torch.sum((y_hat - gt_obs) ** 2)
+                    grad = torch.autograd.grad(g_loss, x)[0]
+                    x = x.detach() - self.guided_eta * grad
 
+        elif self.model_type == 'diffusion':
+            # --- DIFFUSION REVERSE (DDIM/Langevin) ---
+            # We use the 'p_sample_loop' or 'ddim_sample_loop' from the diffusion library
+            # But we need to inject the Measurement Guidance (A_batch) into the loop
+
+            def model_fn(x, t, obs=None):
+                return self.flow_model(x, t, obs)
+
+            # Using a simplified reverse loop logic (similar to Diffusion Posterior Sampling)
+            indices = list(range(self.diffusion.num_timesteps))[::-1]
+
+            for i in indices:
+                t = torch.tensor([i] * B, device=self.device)
+
+                # 1. Standard Diffusion Step (Denoising)
+                out = self.diffusion.p_sample(
+                    model_fn, x, t,
+                    model_kwargs={'obs': gt_obs}
+                )
+                x = out["sample"]
+
+                # 2. Measurement Guidance Step
+                # This pulls the denoised estimate toward the measurements
+                with torch.enable_grad():
+                    x = x.detach().requires_grad_(True)
+                    x_flat = x.view(B, -1)
+                    y_hat = torch.bmm(x_flat.unsqueeze(1), A_batch).squeeze(1)
+                    g_loss = torch.sum((y_hat - gt_obs) ** 2)
+                    grad = torch.autograd.grad(g_loss, x)[0]
+                    # Scale guidance by the current noise level (standard in DPS)
+                    x = x.detach() - self.guided_eta * grad
+
+        self.flow_model.train()
         return x
 
     def training_step(self, batch, batch_idx):
@@ -254,41 +333,42 @@ class ImageFlow(pl.LightningModule):
         B = indices.shape[0]
         gt_obs = self.gt_observations[indices]
         A_batch = torch.stack([self.forward_model.make_A(idx.item(), device=self.device) for idx in indices])
-
-        guidance_loss = torch.tensor(0.0, device=self.device)
-
-        if self.flow_weight > 0:
-            if not self._flow_model_pretrained:
-                if self.current_epoch >= self._warmup_epochs:
-                    epochs_since_warmup = self.current_epoch - self._warmup_epochs
-                    if epochs_since_warmup % 50 == 0 and batch_idx == 0:
-                        print(f"Epoch {self.current_epoch}: Training flow model on latent images...")
-                        self._train_flow_model_on_latents()
-
-            latent = self.latent_images[indices]
-
-            use_flow = self._flow_model_ready and (self._flow_model_pretrained or self.current_epoch >= self._warmup_epochs)
-            if not use_flow:
-                self.log('train_guidance_loss', 0.0, prog_bar=True)
-            else:
-                guided_pred = self._guided_sampling_batch(gt_obs, A_batch, B)
-                guidance_loss = F.l1_loss(guided_pred, latent)
-                self.log('train_guidance_loss', guidance_loss.item(), prog_bar=True)
-
-        # Render loss: forward model applied to current latent images
         latent = self.latent_images[indices]
+
+        # 1. MODEL REFINEMENT (Triggered FIRST as per original code)
+        if not self._flow_model_pretrained and self.current_epoch >= self._warmup_epochs:
+            epochs_since_warmup = self.current_epoch - self._warmup_epochs
+            if epochs_since_warmup % 50 == 0 and batch_idx == 0:
+                print(f"Epoch {self.current_epoch}: Training {self.model_type} model on latent images...")
+                self._train_flow_model_on_latents()
+
+        # 2. GUIDANCE LOSS
+        guidance_loss = torch.tensor(0.0, device=self.device)
+        use_flow = self._flow_model_ready and (
+                    self._flow_model_pretrained or self.current_epoch >= self._warmup_epochs)
+
+        if self.flow_weight > 0 and use_flow and self.use_consistent_latents:
+            # Helper uses self.model_type logic internally
+            guided_pred = self._guided_sampling_batch(gt_obs, A_batch, B)
+            guidance_loss = F.l1_loss(guided_pred, latent)
+
+        # 3. RENDER LOSS (Forward Model)
         x_flat = latent.view(B, -1)
         y_hat = torch.bmm(x_flat.unsqueeze(1), A_batch).squeeze(1)
         render_loss = F.mse_loss(y_hat, gt_obs)
-        self.log('train_render_loss', render_loss.item(), prog_bar=True)
 
-        use_flow_loss = self.flow_weight > 0 and self._flow_model_ready and (self._flow_model_pretrained or self.current_epoch >= self._warmup_epochs)
-        if use_flow_loss:
+        # 4. COMBINED LOSS
+        # If use_consistent_latents is False, render_loss and guidance_loss will
+        # have no effect on optimization because latent is a Buffer, not a Parameter.
+        if self.flow_weight > 0 and use_flow:
             combined_loss = self.flow_weight * guidance_loss + self.render_weight * render_loss
         else:
             combined_loss = self.render_weight * render_loss
 
-        self.log('train_combined_loss', combined_loss.item(), prog_bar=True)
+        self.log('train_render_loss', render_loss)
+        self.log('train_guidance_loss', guidance_loss)
+        self.log('train_combined_loss', combined_loss, prog_bar=True)
+
         return combined_loss
 
     def on_train_epoch_end(self):
@@ -300,11 +380,22 @@ class ImageFlow(pl.LightningModule):
     def generate(self, obs):
         self.flow_model.eval()
         B = obs.shape[0]
-        z = torch.randn(B, self.channels, self.img_size, self.img_size, device=self.device)
-        dt = 1.0 / self.fm_steps
-        for s in range(self.fm_steps):
-            t_c = torch.full((B, 1), s * dt, device=self.device)
-            z = z + self.flow_model(z, t_c, obs) * dt
+
+        if self.model_type == 'flow':
+            z = torch.randn(B, self.channels, self.img_size, self.img_size, device=self.device)
+            dt = 1.0 / self.fm_steps
+            for s in range(self.fm_steps):
+                t_c = torch.full((B, 1), s * dt, device=self.device)
+                z = z + self.flow_model(z, t_c, obs) * dt
+        else:
+            # Standard diffusion sampling loop
+            z = self.diffusion.p_sample_loop(
+                self.flow_model,
+                (B, self.channels, self.img_size, self.img_size),
+                clip_denoised=True,
+                model_kwargs={'obs': obs}
+            )
+
         self.flow_model.train()
         return z
 

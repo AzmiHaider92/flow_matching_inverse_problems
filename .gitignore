@@ -12,3 +12,5 @@ data/
 lightning_logs/
 mnist_flow_checkpoints/
 wandb/
+.idea/PatchFlowMatching.iml
+.idea/misc.xml

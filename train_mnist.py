@@ -38,6 +38,8 @@ def main(args):
         flow_train_epochs=args.flow_train_epochs,
         warmup_epochs=args.warmup_epochs,
         latent_l1_weight=args.latent_l1_weight,
+        use_consistent_latents=args.use_consistent_latents,
+        model_type = args.model_type
     )
 
     callbacks = [
@@ -118,6 +120,12 @@ if __name__ == "__main__":
     parser.add_argument('--use_wandb', type=bool, default=False)
     parser.add_argument('--latent_l1_weight', type=float, default=0.01)
     parser.add_argument('--resume_from_checkpoint', type=str, default=None)
+
+    # Changes
+    parser.add_argument('--use_consistent_latents', type=bool, default=True,
+                        help="If False, latents are random and fixed (not updated).")
+    parser.add_argument('--model_type', type=str, default='flow', choices=['flow', 'diffusion'],
+                        help="Switch between Flow Matching and Diffusion logic.")
 
     args = parser.parse_args()
     main(args)
