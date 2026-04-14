@@ -247,7 +247,7 @@ class ImageFlow(pl.LightningModule):
                 else:
                     # --- Diffusion Training Logic ---
                     # We use the training_losses helper from your diffusion library
-                    t = torch.randint(0, self.diffusion.num_timesteps, (B,), device=self.device)
+                    t = torch.randint(0, self.diffusion.num_timesteps, (B, 1), device=self.device)
                     loss_dict = self.diffusion.training_losses(
                         self.flow_model, x1, t, model_kwargs={'obs': obs}
                     )
@@ -305,7 +305,7 @@ class ImageFlow(pl.LightningModule):
             indices = list(range(self.diffusion.num_timesteps))[::-1]
 
             for i in indices:
-                t = torch.tensor([i] * B, device=self.device)
+                t = torch.full((B, 1), i, device=self.device, dtype=torch.long)
 
                 # 1. Standard Diffusion Step (Denoising)
                 out = self.diffusion.p_sample(

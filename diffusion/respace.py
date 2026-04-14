@@ -1,8 +1,3 @@
-# Modified from OpenAI's diffusion repos
-#     GLIDE: https://github.com/openai/glide-text2im/blob/main/glide_text2im/gaussian_diffusion.py
-#     ADM:   https://github.com/openai/guided-diffusion/blob/main/guided_diffusion
-#     IDDPM: https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py
-
 import numpy as np
 import torch as th
 
@@ -14,11 +9,14 @@ def space_timesteps(num_timesteps, section_counts):
     Create a list of timesteps to use from an original diffusion process,
     given the number of timesteps we want to take from equally-sized portions
     of the original process.
+
     For example, if there's 300 timesteps and the section counts are [10,15,20]
     then the first 100 timesteps are strided to be 10 timesteps, the second 100
     are strided to be 15 timesteps, and the final 100 are strided to be 20.
+
     If the stride is a string starting with "ddim", then the fixed striding
     from the DDIM paper is used, and only one section is allowed.
+
     :param num_timesteps: the number of diffusion steps in the original
                           process to divide up.
     :param section_counts: either a list of numbers, or a string containing
@@ -65,6 +63,7 @@ def space_timesteps(num_timesteps, section_counts):
 class SpacedDiffusion(GaussianDiffusion):
     """
     A diffusion process which can skip steps in a base diffusion process.
+
     :param use_timesteps: a collection (sequence or set) of timesteps from the
                           original diffusion process to retain.
     :param kwargs: the kwargs to create the base diffusion process.
@@ -106,7 +105,7 @@ class SpacedDiffusion(GaussianDiffusion):
         if isinstance(model, _WrappedModel):
             return model
         return _WrappedModel(
-            model, self.timestep_map, self.original_num_steps
+            model, self.timestep_map, self.rescale_timesteps, self.original_num_steps
         )
 
     def _scale_timesteps(self, t):
@@ -115,15 +114,15 @@ class SpacedDiffusion(GaussianDiffusion):
 
 
 class _WrappedModel:
-    def __init__(self, model, timestep_map, original_num_steps):
+    def __init__(self, model, timestep_map, rescale_timesteps, original_num_steps):
         self.model = model
         self.timestep_map = timestep_map
-        # self.rescale_timesteps = rescale_timesteps
+        self.rescale_timesteps = rescale_timesteps
         self.original_num_steps = original_num_steps
 
     def __call__(self, x, ts, **kwargs):
-        #map_tensor = th.tensor(self.timestep_map, device=ts.device, dtype=ts.dtype)
-        #new_ts = map_tensor[ts]
-        # if self.rescale_timesteps:
-        #     new_ts = new_ts.float() * (1000.0 / self.original_num_steps)
-        return self.model(x, ts, **kwargs)
+        map_tensor = th.tensor(self.timestep_map, device=ts.device, dtype=ts.dtype)
+        new_ts = map_tensor[ts]
+        if self.rescale_timesteps:
+            new_ts = new_ts.float() * (1000.0 / self.original_num_steps)
+        return self.model(x, new_ts, **kwargs)
