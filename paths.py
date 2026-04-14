@@ -1,1 +1,1 @@
-datasets_path = r"C:\Users\azmih\Desktop\Projects\flownp\datasets"
+datasets_path = r"/home/azmi/Desktop/projects/datasets"
