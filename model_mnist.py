@@ -14,11 +14,20 @@ from diffusion import create_diffusion
 
 
 class FourierEmbedding(nn.Module):
-    def __init__(self, in_channels, out_channels, scale=20.0):
+    def __init__(self, in_channels=1, out_channels=64, scale=20.0):
         super().__init__()
+        # in_channels should be 1 because 't' is a single scalar per batch item
         self.register_buffer('B', torch.randn(in_channels, out_channels // 2) * scale)
 
     def forward(self, x):
+        # Ensure x is (Batch, 1)
+        if x.ndim == 1:
+            x = x.unsqueeze(-1)
+        # Handle cases where x might be (Batch,) or (Batch, 1, 1, 1)
+        if x.ndim > 2:
+            x = x.view(x.shape[0], 1)
+
+        x = x.to(torch.float32)
         x_proj = 2 * np.pi * x @ self.B
         return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
