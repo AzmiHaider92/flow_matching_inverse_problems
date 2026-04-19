@@ -395,6 +395,9 @@ class ImageFlow(pl.LightningModule):
             if epochs_since_warmup % 50 == 0 and batch_idx == 0:
                 print(f"Epoch {self.current_epoch}: Training {self.model_type} model on latent images...")
                 self._train_flow_model_on_latents()
+                for param in self.flow_model.parameters():
+                    param.requires_grad = True
+                self.flow_model.train()
 
         # 3. RENDER LOSS (Forward Model)
         guided_latent = self._guided_sampling_batch(gt_obs, A_batch, B)
