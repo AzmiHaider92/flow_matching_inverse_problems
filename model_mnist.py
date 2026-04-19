@@ -222,6 +222,30 @@ class ImageFlow(pl.LightningModule):
     def configure_gradient_clipping(self, optimizer, gradient_clip_val, gradient_clip_algorithm):
         self.clip_gradients(optimizer, gradient_clip_val=1.0, gradient_clip_algorithm='norm')
 
+    def train_train_flow_model_on_latents_batch(self, x1, obs):
+        x1 = x1.to(self.device)
+        obs = obs.to(self.device)
+        B = x1.shape[0]
+
+        if self.model_type == 'flow':
+            # --- Flow Matching Training Logic ---
+            x0 = torch.randn_like(x1)
+            t = torch.rand(B, 1, device=self.device)
+            xt = (1 - t.view(B, 1, 1, 1)) * x0 + t.view(B, 1, 1, 1) * x1
+            ut = x1 - x0
+            vt_pred = self.flow_model(xt, t, obs)
+            loss = F.mse_loss(vt_pred, ut)
+
+        else:
+            # --- Diffusion Training Logic ---
+            # We use the training_losses helper from your diffusion library
+            t = torch.randint(0, self.diffusion.num_timesteps, (B, 1), device=self.device)
+            loss_dict = self.diffusion.training_losses(
+                self.flow_model, x1, t, model_kwargs={'obs': obs}
+            )
+            loss = loss_dict["loss"].mean()
+        return loss
+
     def _train_flow_model_on_latents(self):
         # Prepare model for training
         for param in self.flow_model.parameters():
@@ -239,29 +263,8 @@ class ImageFlow(pl.LightningModule):
         for epoch in range(self._flow_train_epochs):
             total_loss = 0.0
             for x1, obs in dataloader:
-                x1 = x1.to(self.device)
-                obs = obs.to(self.device)
-                B = x1.shape[0]
                 optimizer.zero_grad()
-
-                if self.model_type == 'flow':
-                    # --- Flow Matching Training Logic ---
-                    x0 = torch.randn_like(x1)
-                    t = torch.rand(B, 1, device=self.device)
-                    xt = (1 - t.view(B, 1, 1, 1)) * x0 + t.view(B, 1, 1, 1) * x1
-                    ut = x1 - x0
-                    vt_pred = self.flow_model(xt, t, obs)
-                    loss = F.mse_loss(vt_pred, ut)
-
-                else:
-                    # --- Diffusion Training Logic ---
-                    # We use the training_losses helper from your diffusion library
-                    t = torch.randint(0, self.diffusion.num_timesteps, (B, 1), device=self.device)
-                    loss_dict = self.diffusion.training_losses(
-                        self.flow_model, x1, t, model_kwargs={'obs': obs}
-                    )
-                    loss = loss_dict["loss"].mean()
-
+                loss = self.train_train_flow_model_on_latents_batch(x1, obs)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.flow_model.parameters(), 1.0)
                 optimizer.step()
@@ -277,7 +280,6 @@ class ImageFlow(pl.LightningModule):
             param.requires_grad = False
         self._flow_model_ready = True
 
-    @torch.no_grad()
     def _guided_sampling_batch(self, gt_obs, A_batch, B):
         self.flow_model.eval()
 
@@ -337,7 +339,7 @@ class ImageFlow(pl.LightningModule):
         self.flow_model.train()
         return x
 
-    def training_step(self, batch, batch_idx):
+    def training_step_consistant_latents(self, batch, batch_idx):
         (indices,) = batch
         B = indices.shape[0]
         gt_obs = self.gt_observations[indices]
@@ -379,6 +381,35 @@ class ImageFlow(pl.LightningModule):
         self.log('train_combined_loss', combined_loss, prog_bar=True)
 
         return combined_loss
+
+    def training_step_non_consistent(self, batch, batch_idx):
+        (indices,) = batch
+        B = indices.shape[0]
+        gt_obs = self.gt_observations[indices]
+        A_batch = torch.stack([self.forward_model.make_A(idx.item(), device=self.device) for idx in indices])
+        latent = self.latent_images[indices]
+
+        # 1. MODEL REFINEMENT (Triggered FIRST as per original code)
+        if not self._flow_model_pretrained and self.current_epoch >= self._warmup_epochs:
+            if batch_idx == 0:
+                print(f"Epoch {self.current_epoch}: Training {self.model_type} model on latent images...")
+                self._train_flow_model_on_latents()
+
+        # 3. RENDER LOSS (Forward Model)
+        guided_latent = self._guided_sampling_batch(gt_obs, A_batch, B)
+
+        #x_flat = guided_latent.view(B, -1)
+        loss = self.train_train_flow_model_on_latents_batch(guided_latent, gt_obs)
+
+        # 4. COMBINED LOSS
+        self.log('train_combined_loss', loss, prog_bar=True)
+
+    def training_step(self, batch, batch_idx):
+        if self.use_consistent_latents:
+            loss = self.training_step_consistant_latents(batch, batch_idx)
+        else:
+            loss = self.training_step_non_consistent(batch, batch_idx)
+        return loss
 
     def on_train_epoch_end(self):
         if (self.current_epoch + 1) % 50 == 0:
