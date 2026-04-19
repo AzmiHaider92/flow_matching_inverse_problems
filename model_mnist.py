@@ -391,22 +391,35 @@ class ImageFlow(pl.LightningModule):
 
         # 1. MODEL REFINEMENT (Triggered FIRST as per original code)
         if not self._flow_model_pretrained and self.current_epoch >= self._warmup_epochs:
-            epochs_since_warmup = self.current_epoch - self._warmup_epochs
-            if epochs_since_warmup % 50 == 0 and batch_idx == 0:
+            if batch_idx == 0:
                 print(f"Epoch {self.current_epoch}: Training {self.model_type} model on latent images...")
                 self._train_flow_model_on_latents()
-                for param in self.flow_model.parameters():
-                    param.requires_grad = True
-                self.flow_model.train()
+
+        # 2. GUIDANCE LOSS
+        #guidance_loss = torch.tensor(0.0, device=self.device)
+        #use_flow = self._flow_model_ready and (
+        #        self._flow_model_pretrained or self.current_epoch >= self._warmup_epochs)
+
+        #if self.flow_weight > 0 and use_flow and self.use_consistent_latents:
+        #    # Helper uses self.model_type logic internally
+        #    guided_pred = self._guided_sampling_batch(gt_obs, A_batch, B)
+        #    guidance_loss = F.l1_loss(guided_pred, latent)
+
+        guided_pred = self._guided_sampling_batch(gt_obs, A_batch, B)
 
         # 3. RENDER LOSS (Forward Model)
-        guided_latent = self._guided_sampling_batch(gt_obs, A_batch, B)
-
-        #x_flat = guided_latent.view(B, -1)
-        loss = self.train_train_flow_model_on_latents_batch(guided_latent, gt_obs)
+        self.latent_images[indices] = guided_pred
+        x_flat = guided_pred.view(B, -1)
+        y_hat = torch.bmm(x_flat.unsqueeze(1), A_batch).squeeze(1)
+        render_loss = F.mse_loss(y_hat, gt_obs)
 
         # 4. COMBINED LOSS
-        self.log('train_combined_loss', loss, prog_bar=True)
+        # If use_consistent_latents is False, render_loss and guidance_loss will
+        # have no effect on optimization because latent is a Buffer, not a Parameter.
+
+        self.log('train_render_loss', render_loss, prog_bar=True)
+
+        return
 
     def training_step(self, batch, batch_idx):
         if self.use_consistent_latents:
