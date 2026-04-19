@@ -390,10 +390,10 @@ class ImageFlow(pl.LightningModule):
         latent = self.latent_images[indices]
 
         # 1. MODEL REFINEMENT (Triggered FIRST as per original code)
-        if not self._flow_model_pretrained and self.current_epoch >= self._warmup_epochs:
-            if batch_idx == 0:
-                print(f"Epoch {self.current_epoch}: Training {self.model_type} model on latent images...")
-                self._train_flow_model_on_latents()
+        #if not self._flow_model_pretrained and self.current_epoch >= self._warmup_epochs:
+        #    if batch_idx == 0:
+        #        print(f"Epoch {self.current_epoch}: Training {self.model_type} model on latent images...")
+        #        self._train_flow_model_on_latents()
 
         # 3. RENDER LOSS (Forward Model)
         guided_latent = self._guided_sampling_batch(gt_obs, A_batch, B)
