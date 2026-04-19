@@ -391,7 +391,8 @@ class ImageFlow(pl.LightningModule):
 
         # 1. MODEL REFINEMENT (Triggered FIRST as per original code)
         if not self._flow_model_pretrained and self.current_epoch >= self._warmup_epochs:
-            if batch_idx == 0:
+            epochs_since_warmup = self.current_epoch - self._warmup_epochs
+            if epochs_since_warmup % 50 == 0 and batch_idx == 0:
                 print(f"Epoch {self.current_epoch}: Training {self.model_type} model on latent images...")
                 self._train_flow_model_on_latents()
 
