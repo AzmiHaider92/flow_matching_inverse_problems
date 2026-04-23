@@ -1,5 +1,7 @@
 import argparse
 import os
+from datetime import datetime
+
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
@@ -8,6 +10,9 @@ import wandb
 
 
 def main(args):
+    timestamp = datetime.now().strftime("%m-%d_%H-%M")
+    run_name = args.run_name + "_" + timestamp
+
     if args.use_wandb:
         wandb.init(
             entity="viewformer",
@@ -15,7 +20,7 @@ def main(args):
             project="mnist-flow-matching",
             # Track hyperparameters and run metadata.
             config=vars(args),
-            name=args.run_name,
+            name=run_name,
         )
 
     model = ImageFlow(
@@ -42,10 +47,12 @@ def main(args):
         model_type = args.model_type
     )
 
+    save_dir = os.path.join("mnist_flow_checkpoints", run_name)
+    os.makedirs(save_dir, exist_ok=True)
     callbacks = [
         ModelCheckpoint(
-            dirpath="mnist_flow_checkpoints",
-            filename="mnist-flow-{epoch:02d}-{train_combined_loss:.4f}",
+            dirpath=save_dir,
+            filename="mnist-{epoch:02d}-{train_combined_loss:.4f}",
             save_last=True,
         ),
         LearningRateMonitor(logging_interval='epoch'),
@@ -73,8 +80,6 @@ def main(args):
     trainer.fit(model, ckpt_path=args.resume_from_checkpoint if args.resume_from_checkpoint else None)
 
     print("Saving trained latent images...")
-    save_dir = "mnist_trained_latents"
-    os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"{args.run_name}_latents.pt")
     torch.save({
         'latent_images': model.latent_images.detach().cpu(),
