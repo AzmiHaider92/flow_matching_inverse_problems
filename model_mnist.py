@@ -1,7 +1,4 @@
 import os
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
 import pytorch_lightning as pl
 import wandb
@@ -11,32 +8,95 @@ import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 #from loss import RenderingLoss
 from diffusion import create_diffusion
-
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_ch, out_ch):
+
+# -----------------------------
+# Fourier time embedding
+# -----------------------------
+class FourierEmbedding(nn.Module):
+    def __init__(self, in_dim, emb_dim, scale=16.0):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(out_ch, out_ch, 3, padding=1),
-            nn.SiLU(),
-        )
+        self.W = nn.Parameter(torch.randn(in_dim, emb_dim // 2) * scale)
 
     def forward(self, x):
-        return self.net(x)
+        x_proj = 2 * torch.pi * x @ self.W
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
 
+# -----------------------------
+# FiLM Residual Block
+# -----------------------------
+class ResBlock(nn.Module):
+    def __init__(self, in_ch, out_ch, cond_dim):
+        super().__init__()
+
+        self.in_ch = in_ch
+        self.out_ch = out_ch
+
+        self.norm1 = nn.GroupNorm(8, in_ch)
+        self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
+
+        self.norm2 = nn.GroupNorm(8, out_ch)
+        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
+
+        # FiLM: produces scale + shift
+        self.film = nn.Linear(cond_dim, out_ch * 2)
+
+        if in_ch != out_ch:
+            self.skip = nn.Conv2d(in_ch, out_ch, 1)
+        else:
+            self.skip = nn.Identity()
+
+    def forward(self, x, cond):
+        h = self.conv1(F.silu(self.norm1(x)))
+
+        # FiLM conditioning
+        scale, shift = self.film(cond).chunk(2, dim=-1)
+        scale = scale[:, :, None, None]
+        shift = shift[:, :, None, None]
+
+        h = self.norm2(h)
+        h = h * (1 + scale) + shift
+        h = self.conv2(F.silu(h))
+
+        return h + self.skip(x)
+
+
+# -----------------------------
+# Down / Up blocks
+# -----------------------------
+class Down(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.pool = nn.AvgPool2d(2)
+
+    def forward(self, x):
+        return self.pool(x)
+
+
+class Up(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, ref):
+        # Safe upsample (handles odd sizes)
+        return F.interpolate(x, size=ref.shape[-2:], mode="nearest")
+
+
+# -----------------------------
+# Full Diffusion U-Net
+# -----------------------------
 class FullImageFlowModelUNet(nn.Module):
     def __init__(self, in_channels=1, obs_dim=392, base_ch=64):
         super().__init__()
 
-        # ---- Conditioning (same as your model) ----
-        self.time_emb = FourierEmbedding(1, 64, scale=20.0)
+        cond_dim = 256
+
+        # ---- Embeddings ----
+        self.time_emb = FourierEmbedding(1, 128)
 
         self.obs_proj = nn.Sequential(
             nn.Linear(obs_dim, 256),
@@ -44,61 +104,82 @@ class FullImageFlowModelUNet(nn.Module):
             nn.Linear(256, 128),
         )
 
-        self.cond_proj = nn.Linear(64 + 128, 128)
-
-        cond_ch = 128
+        self.cond_proj = nn.Sequential(
+            nn.Linear(128 + 128, cond_dim),
+            nn.SiLU(),
+            nn.Linear(cond_dim, cond_dim),
+        )
 
         # ---- Encoder ----
-        self.enc1 = ConvBlock(in_channels + cond_ch, base_ch)       # 64
-        self.enc2 = ConvBlock(base_ch, base_ch * 2)                 # 128
-        self.enc3 = ConvBlock(base_ch * 2, base_ch * 2)             # 128
+        self.in_conv = nn.Conv2d(in_channels, base_ch, 3, padding=1)
 
-        self.down = nn.AvgPool2d(2)
+        self.res1 = ResBlock(base_ch, base_ch, cond_dim)
+        self.res2 = ResBlock(base_ch, base_ch * 2, cond_dim)
+
+        self.down1 = Down()
+
+        self.res3 = ResBlock(base_ch * 2, base_ch * 2, cond_dim)
+        self.res4 = ResBlock(base_ch * 2, base_ch * 4, cond_dim)
+
+        self.down2 = Down()
 
         # ---- Bottleneck ----
-        self.mid = ConvBlock(base_ch * 2, base_ch * 2)
+        self.mid1 = ResBlock(base_ch * 4, base_ch * 4, cond_dim)
+        self.mid2 = ResBlock(base_ch * 4, base_ch * 4, cond_dim)
 
         # ---- Decoder ----
-        self.up = nn.Upsample(scale_factor=2, mode='nearest')
+        self.up2 = Up()
+        self.res5 = ResBlock(base_ch * 8, base_ch * 2, cond_dim)
 
-        self.dec3 = ConvBlock(base_ch * 4, base_ch * 2)
-        self.dec2 = ConvBlock(base_ch * 3, base_ch)
-        self.dec1 = ConvBlock(base_ch * 2, base_ch)
+        self.up1 = Up()
+        self.res6 = ResBlock(base_ch * 4, base_ch, cond_dim)
+
+        self.res7 = ResBlock(base_ch * 2, base_ch, cond_dim)
 
         # ---- Output ----
-        self.out = nn.Conv2d(base_ch, in_channels, kernel_size=3, padding=1)
+        self.out_norm = nn.GroupNorm(8, base_ch)
+        self.out_conv = nn.Conv2d(base_ch, in_channels, 3, padding=1)
 
-    def forward(self, x_t, t, obs):
-        B, C, H, W = x_t.shape
+    def forward(self, x, t, obs):
+        B = x.shape[0]
 
         # ---- Conditioning ----
-        t_e = self.time_emb(t)
-        o_e = self.obs_proj(obs)
-        cond = self.cond_proj(torch.cat([t_e, o_e], dim=-1))
-        cond_map = cond.view(B, 128, 1, 1).expand(B, 128, H, W)
-
-        x = torch.cat([x_t, cond_map], dim=1)
+        t_emb = self.time_emb(t)
+        o_emb = self.obs_proj(obs)
+        cond = self.cond_proj(torch.cat([t_emb, o_emb], dim=-1))
 
         # ---- Encoder ----
-        e1 = self.enc1(x)
-        e2 = self.enc2(self.down(e1))
-        e3 = self.enc3(self.down(e2))
+        x = self.in_conv(x)
+
+        e1 = self.res1(x, cond)
+        e2 = self.res2(e1, cond)
+
+        d = self.down1(e2)
+
+        e3 = self.res3(d, cond)
+        e4 = self.res4(e3, cond)
+
+        d = self.down2(e4)
 
         # ---- Bottleneck ----
-        m = self.mid(self.down(e3))
+        d = self.mid1(d, cond)
+        d = self.mid2(d, cond)
 
         # ---- Decoder ----
-        d3 = self.up(m)
-        d3 = self.dec3(torch.cat([d3, e3], dim=1))
+        d = self.up2(d, e4)
+        d = torch.cat([d, e4], dim=1)
+        d = self.res5(d, cond)
 
-        d2 = self.up(d3)
-        d2 = self.dec2(torch.cat([d2, e2], dim=1))
+        d = self.up1(d, e2)
+        d = torch.cat([d, e2], dim=1)
+        d = self.res6(d, cond)
 
-        d1 = self.up(d2)
-        d1 = self.dec1(torch.cat([d1, e1], dim=1))
+        d = torch.cat([d, e1], dim=1)
+        d = self.res7(d, cond)
 
         # ---- Output ----
-        return self.out(d1)
+        d = F.silu(self.out_norm(d))
+        return self.out_conv(d)
 
 
 class FourierEmbedding(nn.Module):
