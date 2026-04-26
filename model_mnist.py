@@ -13,6 +13,94 @@ from torchvision import datasets, transforms
 from diffusion import create_diffusion
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ConvBlock(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.SiLU(),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class FullImageFlowModelUNet(nn.Module):
+    def __init__(self, in_channels=1, obs_dim=392, base_ch=64):
+        super().__init__()
+
+        # ---- Conditioning (same as your model) ----
+        self.time_emb = FourierEmbedding(1, 64, scale=20.0)
+
+        self.obs_proj = nn.Sequential(
+            nn.Linear(obs_dim, 256),
+            nn.SiLU(),
+            nn.Linear(256, 128),
+        )
+
+        self.cond_proj = nn.Linear(64 + 128, 128)
+
+        cond_ch = 128
+
+        # ---- Encoder ----
+        self.enc1 = ConvBlock(in_channels + cond_ch, base_ch)       # 64
+        self.enc2 = ConvBlock(base_ch, base_ch * 2)                 # 128
+        self.enc3 = ConvBlock(base_ch * 2, base_ch * 2)             # 128
+
+        self.down = nn.AvgPool2d(2)
+
+        # ---- Bottleneck ----
+        self.mid = ConvBlock(base_ch * 2, base_ch * 2)
+
+        # ---- Decoder ----
+        self.up = nn.Upsample(scale_factor=2, mode='nearest')
+
+        self.dec3 = ConvBlock(base_ch * 4, base_ch * 2)
+        self.dec2 = ConvBlock(base_ch * 3, base_ch)
+        self.dec1 = ConvBlock(base_ch * 2, base_ch)
+
+        # ---- Output ----
+        self.out = nn.Conv2d(base_ch, in_channels, kernel_size=3, padding=1)
+
+    def forward(self, x_t, t, obs):
+        B, C, H, W = x_t.shape
+
+        # ---- Conditioning ----
+        t_e = self.time_emb(t)
+        o_e = self.obs_proj(obs)
+        cond = self.cond_proj(torch.cat([t_e, o_e], dim=-1))
+        cond_map = cond.view(B, 128, 1, 1).expand(B, 128, H, W)
+
+        x = torch.cat([x_t, cond_map], dim=1)
+
+        # ---- Encoder ----
+        e1 = self.enc1(x)
+        e2 = self.enc2(self.down(e1))
+        e3 = self.enc3(self.down(e2))
+
+        # ---- Bottleneck ----
+        m = self.mid(self.down(e3))
+
+        # ---- Decoder ----
+        d3 = self.up(m)
+        d3 = self.dec3(torch.cat([d3, e3], dim=1))
+
+        d2 = self.up(d3)
+        d2 = self.dec2(torch.cat([d2, e2], dim=1))
+
+        d1 = self.up(d2)
+        d1 = self.dec1(torch.cat([d1, e1], dim=1))
+
+        # ---- Output ----
+        return self.out(d1)
+
+
 class FourierEmbedding(nn.Module):
     def __init__(self, in_channels=1, out_channels=64, scale=20.0):
         super().__init__()
@@ -160,7 +248,7 @@ class ImageFlow(pl.LightningModule):
             # Assuming you have a create_diffusion helper available
             self.diffusion = create_diffusion(timestep_respacing="")
 
-        self.flow_model = FullImageFlowModel(in_channels=self.channels, obs_dim=n_measurements)
+        self.flow_model = FullImageFlowModelUNet(in_channels=self.channels, obs_dim=n_measurements)
         if flow_model_path and os.path.exists(flow_model_path):
             ckpt = torch.load(flow_model_path, map_location='cpu')
             self.flow_model.load_state_dict(ckpt if not isinstance(ckpt, dict) else ckpt.get('state_dict', ckpt))
