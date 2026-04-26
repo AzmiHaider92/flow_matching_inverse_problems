@@ -135,10 +135,14 @@ class ImageFlow(pl.LightningModule):
         self.forward_model = ImageLinearForwardModel(D, n_measurements, noise_std=noise_std)
         with torch.no_grad():
             observations = []
+            gen = torch.Generator().manual_seed(0)
             for i in range(self.num_images):
                 A = self.forward_model.make_A(i)
                 x_flat = all_images[i].reshape(-1)
-                observations.append(A.T @ x_flat)
+                y = A.T @ x_flat
+                if noise_std > 0:
+                    y = y + noise_std * torch.randn(n_measurements, generator=gen)
+                observations.append(y)
             observations = torch.stack(observations)
         self.register_buffer('gt_observations', observations)
         self.register_buffer('gt_images', all_images)
