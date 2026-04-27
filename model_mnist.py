@@ -1,4 +1,7 @@
 import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import pytorch_lightning as pl
 import wandb
@@ -8,23 +11,6 @@ import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 #from loss import RenderingLoss
 from diffusion import create_diffusion
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-
-# -----------------------------
-# Fourier time embedding
-# -----------------------------
-class FourierEmbedding(nn.Module):
-    def __init__(self, in_dim, emb_dim, scale=16.0):
-        super().__init__()
-        self.W = nn.Parameter(torch.randn(in_dim, emb_dim // 2) * scale)
-
-    def forward(self, x):
-        x_proj = 2 * torch.pi * x @ self.W
-        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
-
 
 # -----------------------------
 # FiLM Residual Block
@@ -180,8 +166,8 @@ class FullImageFlowModelUNet(nn.Module):
         # ---- Output ----
         d = F.silu(self.out_norm(d))
         return self.out_conv(d)
-
-
+        
+        
 class FourierEmbedding(nn.Module):
     def __init__(self, in_channels=1, out_channels=64, scale=20.0):
         super().__init__()
@@ -202,15 +188,23 @@ class FourierEmbedding(nn.Module):
 
 
 class FullImageFlowModel(nn.Module):
-    def __init__(self, in_channels=1, obs_dim=392):
+    def __init__(self, in_channels=1, obs_dim=392, obs_condition=True):
         super().__init__()
+        self.obs_condition = obs_condition
+
         self.time_emb = FourierEmbedding(1, 64, scale=20.0)
-        self.obs_proj = nn.Sequential(
-            nn.Linear(obs_dim, 256),
-            nn.SiLU(),
-            nn.Linear(256, 128),
-        )
-        self.cond_proj = nn.Linear(64 + 128, 128)
+
+        if self.obs_condition:
+            self.obs_proj = nn.Sequential(
+                nn.Linear(obs_dim, 256),
+                nn.SiLU(),
+                nn.Linear(256, 128),
+            )
+            cond_dim = 64 + 128
+        else:
+            cond_dim = 64  # only time
+
+        self.cond_proj = nn.Linear(cond_dim, 128)
 
         self.net = nn.Sequential(
             nn.Conv2d(in_channels + 128, 64, kernel_size=3, padding=1),
@@ -224,12 +218,22 @@ class FullImageFlowModel(nn.Module):
             nn.Conv2d(64, in_channels, kernel_size=3, padding=1)
         )
 
-    def forward(self, x_t, t, obs):
+    def forward(self, x_t, t, obs=None):
         B, C, H, W = x_t.shape
+
         t_e = self.time_emb(t)
-        o_e = self.obs_proj(obs)
-        cond = self.cond_proj(torch.cat([t_e, o_e], dim=-1))
+
+        if self.obs_condition:
+            if obs is None:
+                raise ValueError("obs must be provided when obs_condition=True")
+            o_e = self.obs_proj(obs)
+            cond_input = torch.cat([t_e, o_e], dim=-1)
+        else:
+            cond_input = t_e  # ignore obs completely
+
+        cond = self.cond_proj(cond_input)
         cond_map = cond.view(B, 128, 1, 1).expand(B, 128, H, W)
+
         return self.net(torch.cat([x_t, cond_map], dim=1))
 
 
@@ -271,9 +275,11 @@ class ImageFlow(pl.LightningModule):
                  batch_size=128, fm_steps=100,
                  flow_train_epochs=10, warmup_epochs=5,
                  latent_l1_weight=0.01,
-                 use_consistent_latents=True, model_type='flow'):
+                 use_consistent_latents=True, model_type='flow', obs_condition=True):
         super().__init__()
         self.save_hyperparameters()
+
+        self.obs_condition = obs_condition
         self.use_consistent_latents = use_consistent_latents
         self.model_type = model_type
         self.dataset_name = dataset_name
@@ -329,7 +335,7 @@ class ImageFlow(pl.LightningModule):
             # Assuming you have a create_diffusion helper available
             self.diffusion = create_diffusion(timestep_respacing="")
 
-        self.flow_model = FullImageFlowModelUNet(in_channels=self.channels, obs_dim=n_measurements)
+        self.flow_model = FullImageFlowModel(in_channels=self.channels, obs_dim=n_measurements, obs_condition=self.obs_condition)
         if flow_model_path and os.path.exists(flow_model_path):
             ckpt = torch.load(flow_model_path, map_location='cpu')
             self.flow_model.load_state_dict(ckpt if not isinstance(ckpt, dict) else ckpt.get('state_dict', ckpt))
@@ -341,8 +347,6 @@ class ImageFlow(pl.LightningModule):
 
         #self.render_loss_fn = RenderingLoss(loss_type=self.render_loss_type)
         self.indices_to_visualize = self._pick_viz_indices()
-
-
 
     def _wandb_log(self, data):
         if self.logger:
@@ -406,7 +410,7 @@ class ImageFlow(pl.LightningModule):
             t = torch.rand(B, 1, device=self.device)
             xt = (1 - t.view(B, 1, 1, 1)) * x0 + t.view(B, 1, 1, 1) * x1
             ut = x1 - x0
-            vt_pred = self.flow_model(xt, t, obs)
+            vt_pred = self.flow_model(xt, t, obs if self.obs_condition else None)
             loss = F.mse_loss(vt_pred, ut)
 
         else:
@@ -414,7 +418,7 @@ class ImageFlow(pl.LightningModule):
             # We use the training_losses helper from your diffusion library
             t = torch.randint(0, self.diffusion.num_timesteps, (B, 1), device=self.device)
             loss_dict = self.diffusion.training_losses(
-                self.flow_model, x1, t, model_kwargs={'obs': obs}
+                self.flow_model, x1, t, model_kwargs={'obs': obs} if self.obs_condition else {}
             )
             loss = loss_dict["loss"].mean()
         return loss
@@ -465,7 +469,7 @@ class ImageFlow(pl.LightningModule):
             for step in range(self.guided_N):
                 t_c = torch.full((B, 1), step * dt, device=self.device)
                 # Standard Flow Step
-                v = self.flow_model(x, t_c, gt_obs)
+                v = self.flow_model(x, t_c, gt_obs if self.obs_condition else None)
                 x = x + v * dt
 
                 # Measurement Guidance (DPS-style)
@@ -482,19 +486,23 @@ class ImageFlow(pl.LightningModule):
             # We use the 'p_sample_loop' or 'ddim_sample_loop' from the diffusion library
             # But we need to inject the Measurement Guidance (A_batch) into the loop
 
-            def model_fn(x, t, obs=None):
-                return self.flow_model(x, t, obs)
+            def model_fn(x, t, **kwargs):
+                obs = kwargs.get('obs', None)
+                return self.flow_model(x, t, obs if self.obs_condition else None)
 
-            # Using a simplified reverse loop logic (similar to Diffusion Posterior Sampling)
             indices = list(range(self.diffusion.num_timesteps))[::-1]
 
             for i in indices:
-                t = torch.full((B, 1), i, device=self.device, dtype=torch.long)
+                t = torch.full((B,), i, device=self.device, dtype=torch.long)
 
-                # 1. Standard Diffusion Step (Denoising)
+                if self.obs_condition:
+                    model_kwargs = {'obs': gt_obs}
+                else:
+                    model_kwargs = {}
+
                 out = self.diffusion.p_sample(
                     model_fn, x, t,
-                    model_kwargs={'obs': gt_obs}
+                    model_kwargs=model_kwargs
                 )
                 x = out["sample"]
 
@@ -607,23 +615,32 @@ class ImageFlow(pl.LightningModule):
             self._log_guided_samples()
 
     @torch.no_grad()
-    def generate(self, obs):
+    def generate(self, obs=None):
         self.flow_model.eval()
-        B = obs.shape[0]
+        B = obs.shape[0] if obs is not None else 1
 
         if self.model_type == 'flow':
             z = torch.randn(B, self.channels, self.img_size, self.img_size, device=self.device)
             dt = 1.0 / self.fm_steps
+
             for s in range(self.fm_steps):
                 t_c = torch.full((B, 1), s * dt, device=self.device)
-                z = z + self.flow_model(z, t_c, obs) * dt
+
+                obs_input = obs if self.obs_condition else None
+                z = z + self.flow_model(z, t_c, obs_input) * dt
+
         else:
-            # Standard diffusion sampling loop
+            # Diffusion sampling
+            if self.obs_condition:
+                model_kwargs = {'obs': obs}
+            else:
+                model_kwargs = {}
+
             z = self.diffusion.p_sample_loop(
                 self.flow_model,
                 (B, self.channels, self.img_size, self.img_size),
                 clip_denoised=True,
-                model_kwargs={'obs': obs}
+                model_kwargs=model_kwargs
             )
 
         self.flow_model.train()

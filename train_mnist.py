@@ -44,7 +44,8 @@ def main(args):
         warmup_epochs=args.warmup_epochs,
         latent_l1_weight=args.latent_l1_weight,
         use_consistent_latents=args.use_consistent_latents,
-        model_type = args.model_type
+        model_type=args.model_type,
+        obs_condition=args.obs_condition
     )
 
     save_dir = os.path.join("mnist_flow_checkpoints", run_name)
@@ -127,6 +128,8 @@ if __name__ == "__main__":
     parser.add_argument('--resume_from_checkpoint', type=str, default=None)
 
     # Changes
+    parser.add_argument('--obs_condition', type=bool, default=False,
+                        help="If False, flow model is not conditioned on observation")
     parser.add_argument('--use_consistent_latents', type=bool, default=False,
                         help="If False, latents are random and fixed (not updated).")
     parser.add_argument('--model_type', type=str, default='flow', choices=['flow', 'diffusion'],
