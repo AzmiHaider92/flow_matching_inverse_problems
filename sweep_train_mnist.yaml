@@ -1,0 +1,27 @@
+program: train_mnist.py
+method: bayes
+metric:
+  name: latent_psnr
+  goal: maximize
+parameters:
+  latent_lr:
+    values: [0.003, 0.01, 0.1]
+  render_weight:
+    values: [0.5, 0.8, 1.0]
+  guided_N:
+    values: [10, 20, 30]
+  guided_eta:
+    values: [0.1, 0.5, 1.0]
+  flow_train_epochs:
+    values: [10, 30, 50]
+  flow_refine_every:
+    values: [10, 30, 50]
+command:
+  - ${env}
+  - D:\School\Thesis-Expirements\cryoflowvenv\Scripts\python.exe
+  - ${program}
+  - --dataset_name=mnist
+  - --model_type=flow
+  - --use_consistent_latents=True
+  - --run_name=sweep_mnist
+  - ${args}

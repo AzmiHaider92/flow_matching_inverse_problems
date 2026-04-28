@@ -15,13 +15,14 @@ def main(args):
 
     if args.use_wandb:
         wandb.init(
-            entity="viewformer",
             # Set the wandb project where this run will be logged.
             project="mnist-flow-matching",
             # Track hyperparameters and run metadata.
             config=vars(args),
             name=run_name,
         )
+        wandb.save("model_mnist.py", policy="now")  # Save a copy of the model file for reference
+
 
     model = ImageFlow(
         dataset_name=args.dataset_name,
@@ -32,9 +33,7 @@ def main(args):
         latent_lr=args.latent_lr,
         flow_weight=args.flow_weight,
         render_weight=args.render_weight,
-        render_loss_type=args.render_loss_type,
         guided_N=args.guided_N,
-        guided_warmup_steps=args.guided_warmup_steps,
         guided_eta=args.guided_eta,
         num_images=args.num_images,
         flow_model_path=args.flow_model_path,
@@ -42,9 +41,9 @@ def main(args):
         fm_steps=args.fm_steps,
         flow_train_epochs=args.flow_train_epochs,
         warmup_epochs=args.warmup_epochs,
-        latent_l1_weight=args.latent_l1_weight,
+        flow_refine_every=args.flow_refine_every,
         use_consistent_latents=args.use_consistent_latents,
-        model_type = args.model_type
+        model_type=args.model_type,
     )
 
     save_dir = os.path.join("mnist_flow_checkpoints", run_name)
@@ -107,27 +106,26 @@ if __name__ == "__main__":
     parser.add_argument('--num_images', type=int, default=10_000)
     parser.add_argument('--n_measurements', type=int, default=100)
     parser.add_argument('--noise_std', type=float, default=1e-3)
-    parser.add_argument('--flow_lr', type=float, default=2e-4)
+    parser.add_argument('--flow_lr', type=float, default=1e-4)
     parser.add_argument('--latent_lr', type=float, default=0.01)
     parser.add_argument('--flow_weight', type=float, default=1.0)
     parser.add_argument('--render_weight', type=float, default=1.0)
-    parser.add_argument('--render_loss_type', type=str, default='mse', choices=['mse', 'mae', 'ncc'])
-    parser.add_argument('--guided_N', type=int, default=10)
-    parser.add_argument('--guided_warmup_steps', type=int, default=3)
-    parser.add_argument('--guided_eta', type=float, default=0.1)
+    parser.add_argument('--guided_N', type=int, default=20)
+    parser.add_argument('--guided_eta', type=float, default=1.0)
     parser.add_argument('--flow_model_path', type=str, default=None)
     parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--fm_steps', type=int, default=100)
-    parser.add_argument('--flow_train_epochs', type=int, default=50)
-    parser.add_argument('--warmup_epochs', type=int, default=100)
-    parser.add_argument('--epochs', type=int, default=5000)
+    parser.add_argument('--fm_steps', type=int, default=20)
+    parser.add_argument('--flow_train_epochs', type=int, default=5)
+    parser.add_argument('--warmup_epochs', type=int, default=0)
+    parser.add_argument('--flow_refine_every', type=int, default=30,
+                        help='Train/refine the flow model every N epochs after warmup.')
+    parser.add_argument('--epochs', type=int, default=2000)
     parser.add_argument('--run_name', type=str, default='mnist_flow')
-    parser.add_argument('--use_wandb', type=bool, default=False)
-    parser.add_argument('--latent_l1_weight', type=float, default=0.01)
+    parser.add_argument('--use_wandb', type=bool, default=True)
     parser.add_argument('--resume_from_checkpoint', type=str, default=None)
 
     # Changes
-    parser.add_argument('--use_consistent_latents', type=bool, default=False,
+    parser.add_argument('--use_consistent_latents', type=bool, default=True,
                         help="If False, latents are random and fixed (not updated).")
     parser.add_argument('--model_type', type=str, default='flow', choices=['flow', 'diffusion'],
                         help="Switch between Flow Matching and Diffusion logic.")

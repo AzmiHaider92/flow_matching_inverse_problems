@@ -43,15 +43,12 @@ def k_precision_recall_psnr(matrix, gt_intra, gen_intra, k=3):
 
 
 @torch.no_grad()
-def generate_samples(model, num_samples, device, batch_size=64):
-    obs_all = model.gt_observations.to(device)
-    n_avail = obs_all.shape[0]
-    indices = torch.arange(num_samples, device=device) % n_avail
+def generate_samples(model, num_samples, batch_size=64):
     samples = []
     for s in range(0, num_samples, batch_size):
-        idx = indices[s:s + batch_size]
-        samples.append(model.generate(obs_all[idx]))
-    return torch.cat(samples, dim=0), indices
+        b = min(batch_size, num_samples - s)
+        samples.append(model.generate(n_samples=b))
+    return torch.cat(samples, dim=0)
 
 
 def main(args):
@@ -60,14 +57,12 @@ def main(args):
     model = model.to(device).eval()
 
     n_samples = args.num_samples or model.num_images
-    print(f"Generating {n_samples} samples...")
-    gen, sample_obs_idx = generate_samples(model, n_samples, device)
+    print(f"Generating {n_samples} unguided samples...")
+    gen = generate_samples(model, n_samples).to(device)
     gt = model.gt_images.to(device)
 
     print(f"Computing PSNR matrix ({gt.shape[0]} GT x {gen.shape[0]} gen)...")
     matrix = psnr_matrix(gt, gen)
-
-    paired_psnr = float(matrix[sample_obs_idx, torch.arange(n_samples, device=device)].mean())
 
     precision_v = precision_psnr(matrix)
     recall_v = recall_psnr(matrix)
@@ -78,7 +73,6 @@ def main(args):
     gen_intra = psnr_matrix(gen, gen)
     k_p, k_r = k_precision_recall_psnr(matrix, gt_intra, gen_intra, k=args.k)
 
-    print(f"paired_psnr: {paired_psnr}")
     print(f"precision_psnr: {precision_v}, recall_psnr: {recall_v}, emd_psnr: {emd_v}")
     print(f"K_precision: {k_p}, K_recall: {k_r}")
 
