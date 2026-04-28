@@ -310,7 +310,12 @@ class ImageFlow(pl.LightningModule):
         dataset = torch.utils.data.TensorDataset(x1_all)
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=64, shuffle=True)
 
-        optimizer = torch.optim.Adam(self.flow_model.parameters(), lr=self.flow_lr, betas=(0.9, 0.95), weight_decay=1e-5)
+        if self.use_consistent_latents:
+            betas = (0.9, 0.95)
+        else: # none persistent latents:
+            betas = (0.999, 0.999) 
+
+        optimizer = torch.optim.Adam(self.flow_model.parameters(), lr=self.flow_lr, betas=betas, weight_decay=1e-5)
 
         for epoch in range(self._flow_train_epochs):
             total_loss = 0.0

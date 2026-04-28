@@ -2,7 +2,7 @@ import argparse
 import torch
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-from model_mnist import ImageFlow
+from model_mnist import ImageFlow, FullImageFlowModel
 
 
 def psnr_matrix(a, b, max_val=2.0, chunk_size=64):
@@ -51,6 +51,16 @@ def generate_samples(model, num_samples, batch_size=64):
     return torch.cat(samples, dim=0)
 
 
+def generate_guided_samples(model, batch_size=64):
+    n = model.num_images
+    samples = []
+    for s in range(0, n, batch_size):
+        e = min(s + batch_size, n)
+        indices = torch.arange(s, e, device=model.device)
+        samples.append(model._guided_sample(indices).detach())
+    return torch.cat(samples, dim=0)
+
+
 def evaluate(gt, gen, k, label):
     print(f"[{label}] Computing PSNR matrix ({gt.shape[0]} GT x {gen.shape[0]} gen)...")
     matrix = psnr_matrix(gt, gen)
@@ -86,6 +96,10 @@ def main(args):
     if getattr(model, 'use_consistent_latents', False):
         latents = model.latent_images.detach().to(device)
         evaluate(gt, latents, args.k, label='latents')
+
+    print(f"Generating {model.num_images} guided samples...")
+    guided = generate_guided_samples(model).to(device)
+    evaluate(gt, guided, args.k, label='guided')
 
 
 if __name__ == "__main__":
