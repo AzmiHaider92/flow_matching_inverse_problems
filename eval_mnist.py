@@ -51,30 +51,41 @@ def generate_samples(model, num_samples, batch_size=64):
     return torch.cat(samples, dim=0)
 
 
-def main(args):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = ImageFlow.load_from_checkpoint(args.checkpoint_path)
-    model = model.to(device).eval()
-
-    n_samples = args.num_samples or model.num_images
-    print(f"Generating {n_samples} unguided samples...")
-    gen = generate_samples(model, n_samples).to(device)
-    gt = model.gt_images.to(device)
-
-    print(f"Computing PSNR matrix ({gt.shape[0]} GT x {gen.shape[0]} gen)...")
+def evaluate(gt, gen, k, label):
+    print(f"[{label}] Computing PSNR matrix ({gt.shape[0]} GT x {gen.shape[0]} gen)...")
     matrix = psnr_matrix(gt, gen)
 
     precision_v = precision_psnr(matrix)
     recall_v = recall_psnr(matrix)
     emd_v = emd_psnr(matrix)
 
-    print("Computing intra PSNR matrices for k-NN precision/recall...")
+    print(f"[{label}] Computing intra PSNR matrices for k-NN precision/recall...")
     gt_intra = psnr_matrix(gt, gt)
     gen_intra = psnr_matrix(gen, gen)
-    k_p, k_r = k_precision_recall_psnr(matrix, gt_intra, gen_intra, k=args.k)
+    k_p, k_r = k_precision_recall_psnr(matrix, gt_intra, gen_intra, k=k)
 
-    print(f"precision_psnr: {precision_v}, recall_psnr: {recall_v}, emd_psnr: {emd_v}")
-    print(f"K_precision: {k_p}, K_recall: {k_r}")
+    print(f"[{label}] precision_psnr: {precision_v}, recall_psnr: {recall_v}, emd_psnr: {emd_v}")
+    print(f"[{label}] K_precision: {k_p}, K_recall: {k_r}")
+
+
+def main(args):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = ImageFlow.load_from_checkpoint(args.checkpoint_path)
+    model = model.to(device).eval()
+
+    if args.fm_steps > 0:
+        model.fm_steps = args.fm_steps
+
+    gt = model.gt_images.to(device)
+
+    n_samples = args.num_samples or model.num_images
+    print(f"Generating {n_samples} unguided samples...")
+    gen = generate_samples(model, n_samples).to(device)
+    evaluate(gt, gen, args.k, label='generated')
+
+    if getattr(model, 'use_consistent_latents', False):
+        latents = model.latent_images.detach().to(device)
+        evaluate(gt, latents, args.k, label='latents')
 
 
 if __name__ == "__main__":
@@ -82,7 +93,9 @@ if __name__ == "__main__":
     p.add_argument('--checkpoint_path', type=str, required=True)
     p.add_argument('--num_samples', type=int, default=0,
                    help='0 = use model.num_images (one sample per GT image)')
-    p.add_argument('--k', type=int, default=3)
+    p.add_argument('--k', type=int, default=5)
+    p.add_argument('--fm_steps', type=int, default=0,
+                   help='0 = use the value stored in the checkpoint')
     p.add_argument('--run_name', type=str, default='mnist-eval')
     args = p.parse_args()
     main(args)
