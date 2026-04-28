@@ -93,6 +93,8 @@ class FullImageFlowModel(nn.Module):
         self.out_conv = nn.Conv2d(c1, in_channels, 3, padding=1)
 
     def forward(self, x_t, t):
+        if t.dim() == 1:
+            t = t.float().view(-1, 1)
         t_emb = self.time_mlp(self.time_emb(t))
         h0 = self.in_conv(x_t)
         h1 = self.down1(h0, t_emb)
@@ -375,7 +377,7 @@ class ImageFlow(pl.LightningModule):
             # But we need to inject the Measurement Guidance (A_batch) into the loop
 
             def model_fn(x, t):
-                return self.flow_model(x, t)
+                return self.flow_model(x, t.float().view(-1, 1))
 
             # Using a simplified reverse loop logic (similar to Diffusion Posterior Sampling)
             indices = list(range(self.diffusion.num_timesteps))[::-1]
