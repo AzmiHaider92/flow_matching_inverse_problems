@@ -15,6 +15,7 @@ def main(args):
 
     if args.use_wandb:
         wandb.init(
+            entity="viewformer",
             # Set the wandb project where this run will be logged.
             project="mnist-flow-matching",
             # Track hyperparameters and run metadata.
@@ -121,11 +122,11 @@ if __name__ == "__main__":
                         help='Train/refine the flow model every N epochs after warmup.')
     parser.add_argument('--epochs', type=int, default=2000)
     parser.add_argument('--run_name', type=str, default='mnist_flow')
-    parser.add_argument('--use_wandb', type=bool, default=True)
+    parser.add_argument('--use_wandb', type=bool, default=False)
     parser.add_argument('--resume_from_checkpoint', type=str, default=None)
 
     # Changes
-    parser.add_argument('--use_consistent_latents', type=bool, default=True,
+    parser.add_argument('--use_consistent_latents', type=bool, default=False,
                         help="If False, latents are random and fixed (not updated).")
     parser.add_argument('--model_type', type=str, default='flow', choices=['flow', 'diffusion'],
                         help="Switch between Flow Matching and Diffusion logic.")
