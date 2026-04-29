@@ -139,24 +139,24 @@ def generate_guided_samples(model, batch_size=64):
 
 
 def evaluate(gt, gen, k, label):
-    print(f"[{label}] Computing PSNR matrix ({gt.shape[0]} GT x {gen.shape[0]} gen)...")
+    #print(f"[{label}] Computing PSNR matrix ({gt.shape[0]} GT x {gen.shape[0]} gen)...")
     matrix = psnr_matrix(gt, gen)
     precision_v = precision_psnr(matrix)
     recall_v = recall_psnr(matrix)
     emd_v = emd_psnr(matrix)
 
-    print(f"[{label}] Computing intra PSNR matrices for k-NN precision/recall...")
+    #print(f"[{label}] Computing intra PSNR matrices for k-NN precision/recall...")
     gt_intra = psnr_matrix(gt, gt)
     gen_intra = psnr_matrix(gen, gen)
     k_p, k_r = k_precision_recall_psnr(matrix, gt_intra, gen_intra, k=k)
 
-    print(f"[{label}] Computing SSIM matrix ({gt.shape[0]} GT x {gen.shape[0]} gen)...")
+    #print(f"[{label}] Computing SSIM matrix ({gt.shape[0]} GT x {gen.shape[0]} gen)...")
     ssim_mat = ssim_matrix(gt, gen)
     precision_s = precision_ssim(ssim_mat)
     recall_s = recall_ssim(ssim_mat)
     emd_s = emd_ssim(ssim_mat)
 
-    print(f"[{label}] Computing intra SSIM matrices for k-NN precision/recall...")
+    #print(f"[{label}] Computing intra SSIM matrices for k-NN precision/recall...")
     gt_intra_s = ssim_matrix(gt, gt)
     gen_intra_s = ssim_matrix(gen, gen)
     k_p_s, k_r_s = k_precision_recall_ssim(ssim_mat, gt_intra_s, gen_intra_s, k=k)
