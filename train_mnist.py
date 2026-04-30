@@ -43,7 +43,8 @@ def main(args):
         flow_train_epochs=args.flow_train_epochs,
         warmup_epochs=args.warmup_epochs,
         flow_refine_every=args.flow_refine_every,
-        use_consistent_latents=args.use_consistent_latents,
+        use_persistent_latents=args.PL,
+        use_gaussian_smoothing=args.GS,
         model_type=args.model_type,
     )
 
@@ -118,7 +119,7 @@ if __name__ == "__main__":
     parser.add_argument('--fm_steps', type=int, default=20)
     parser.add_argument('--flow_train_epochs', type=int, default=5)
     parser.add_argument('--warmup_epochs', type=int, default=0)
-    parser.add_argument('--flow_refine_every', type=int, default=30,
+    parser.add_argument('--flow_refine_every', type=int, default=1,
                         help='Train/refine the flow model every N epochs after warmup.')
     parser.add_argument('--epochs', type=int, default=2000)
     parser.add_argument('--run_name', type=str, default='mnist_flow')
@@ -126,8 +127,10 @@ if __name__ == "__main__":
     parser.add_argument('--resume_from_checkpoint', type=str, default=None)
 
     # Changes
-    parser.add_argument('--use_consistent_latents', type=bool, default=False,
-                        help="If False, latents are random and fixed (not updated).")
+    parser.add_argument('--PL', type=bool, default=False,
+                        help="Persistent latents. If false, latents are replaced after guidance, not using optimizer")
+    parser.add_argument('--GS', type=bool, default=False,
+                        help="Using Gaussian smoothing: in the optimizer beta-1=0.999 means gaussian smoothing")
     parser.add_argument('--model_type', type=str, default='flow', choices=['flow', 'diffusion'],
                         help="Switch between Flow Matching and Diffusion logic.")
 

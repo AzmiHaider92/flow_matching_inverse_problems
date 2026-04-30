@@ -148,10 +148,13 @@ class ImageFlow(pl.LightningModule):
                  flow_train_epochs=10, warmup_epochs=5,
                  flow_refine_every=50,
                  latent_l1_weight=0.01,
-                 use_consistent_latents=True, model_type='flow'):
+                 use_persistent_latents=True,
+                 use_gaussian_smoothing=True,
+                 model_type='flow'):
         super().__init__()
         self.save_hyperparameters()
-        self.use_consistent_latents = use_consistent_latents
+        self.use_persistent_latents = use_persistent_latents
+        self.use_gaussian_smoothing = use_gaussian_smoothing
         self.model_type = model_type
         self.dataset_name = dataset_name
         self.data_root = data_root
@@ -194,7 +197,7 @@ class ImageFlow(pl.LightningModule):
         self.register_buffer('gt_images', all_images)
 
         # Latent Management
-        if self.use_consistent_latents:
+        if self.use_persistent_latents:
             #self.latent_images = nn.Parameter(torch.zeros(self.num_images, self.channels, self.img_size, self.img_size))
             self.latent_images = nn.Parameter(torch.randn(self.num_images, self.channels, self.img_size, self.img_size))
         else:
@@ -262,7 +265,7 @@ class ImageFlow(pl.LightningModule):
     def configure_optimizers(self):
         params = []
         # Only optimize latents if "consistent" mode is ON
-        if self.use_consistent_latents:
+        if self.use_persistent_latents:
             params.append({'params': [self.latent_images], 'lr': self.latent_lr})
 
         if not self._flow_model_pretrained:
@@ -312,7 +315,7 @@ class ImageFlow(pl.LightningModule):
         dataset = torch.utils.data.TensorDataset(x1_all)
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=64, shuffle=True)
 
-        if self.use_consistent_latents:
+        if not self.use_gaussian_smoothing:
             betas = (0.9, 0.95)
         else: # none persistent latents:
             betas = (0.999, 0.999) 
@@ -434,7 +437,7 @@ class ImageFlow(pl.LightningModule):
         use_flow = self._flow_model_ready and (
                     self._flow_model_pretrained or self.current_epoch >= self._warmup_epochs)
 
-        if self.flow_weight > 0 and use_flow and self.use_consistent_latents:
+        if self.flow_weight > 0 and use_flow and self.use_persistent_latents:
             # Helper uses self.model_type logic internally
             guided_pred = self._guided_sampling_batch(gt_obs, A_batch, B)
             guidance_loss = F.l1_loss(guided_pred, latent)
@@ -445,7 +448,7 @@ class ImageFlow(pl.LightningModule):
         render_loss = F.mse_loss(y_hat, gt_obs)
 
         # 4. COMBINED LOSS
-        # If use_consistent_latents is False, render_loss and guidance_loss will
+        # If use_persistent_latents is False, render_loss and guidance_loss will
         # have no effect on optimization because latent is a Buffer, not a Parameter.
         if self.flow_weight > 0 and use_flow:
             combined_loss = self.flow_weight * guidance_loss + self.render_weight * render_loss
@@ -476,7 +479,7 @@ class ImageFlow(pl.LightningModule):
         #use_flow = self._flow_model_ready and (
         #        self._flow_model_pretrained or self.current_epoch >= self._warmup_epochs)
 
-        #if self.flow_weight > 0 and use_flow and self.use_consistent_latents:
+        #if self.flow_weight > 0 and use_flow and self.use_persistent_latents:
         #    # Helper uses self.model_type logic internally
         #    guided_pred = self._guided_sampling_batch(gt_obs, A_batch, B)
         #    guidance_loss = F.l1_loss(guided_pred, latent)
@@ -490,7 +493,7 @@ class ImageFlow(pl.LightningModule):
         render_loss = F.mse_loss(y_hat, gt_obs)
 
         # 4. COMBINED LOSS
-        # If use_consistent_latents is False, render_loss and guidance_loss will
+        # If use_persistent_latents is False, render_loss and guidance_loss will
         # have no effect on optimization because latent is a Buffer, not a Parameter.
 
         self.log('train_render_loss', render_loss, prog_bar=True)
@@ -498,7 +501,7 @@ class ImageFlow(pl.LightningModule):
         return
 
     def training_step(self, batch, batch_idx):
-        if self.use_consistent_latents:
+        if self.use_persistent_latents:
             loss = self.training_step_consistant_latents(batch, batch_idx)
         else:
             loss = self.training_step_non_consistent(batch, batch_idx)
