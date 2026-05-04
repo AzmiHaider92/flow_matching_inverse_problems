@@ -131,7 +131,7 @@ if __name__ == "__main__":
                         help="Persistent latents. If false, latents are replaced after guidance, not using optimizer")
     parser.add_argument('--GS', type=bool, default=False,
                         help="Using Gaussian smoothing: in the optimizer beta-1=0.999 means gaussian smoothing")
-    parser.add_argument('--model_type', type=str, default='flow', choices=['flow', 'diffusion'],
+    parser.add_argument('--model_type', type=str, default='flow', choices=['flow', 'diffusion', 'diem'],
                         help="Switch between Flow Matching and Diffusion logic.")
 
     args = parser.parse_args()

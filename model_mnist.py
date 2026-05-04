@@ -206,8 +206,7 @@ class ImageFlow(pl.LightningModule):
             self.register_buffer('latent_images', random_latents)
 
         # Diffusion Setup (Conditional)
-        if self.model_type == 'diffusion':
-            # Assuming you have a create_diffusion helper available
+        if self.model_type in ['diffusion', 'diem']:
             self.diffusion = create_diffusion(timestep_respacing="")
 
         self.flow_model = FullImageFlowModel(in_channels=self.channels)
@@ -222,8 +221,6 @@ class ImageFlow(pl.LightningModule):
 
         #self.render_loss_fn = RenderingLoss(loss_type=self.render_loss_type)
         self.indices_to_visualize = self._pick_viz_indices()
-
-
 
     def _wandb_log(self, data):
         if self.logger:
@@ -264,7 +261,7 @@ class ImageFlow(pl.LightningModule):
 
     def configure_optimizers(self):
         params = []
-        # Only optimize latents if "consistent" mode is ON
+        # Only optimize latents if "persistent" mode is ON
         if self.use_persistent_latents:
             params.append({'params': [self.latent_images], 'lr': self.latent_lr})
 
@@ -275,6 +272,38 @@ class ImageFlow(pl.LightningModule):
 
     def configure_gradient_clipping(self, optimizer, gradient_clip_val, gradient_clip_algorithm):
         self.clip_gradients(optimizer, gradient_clip_val=1.0, gradient_clip_algorithm='norm')
+
+    def _direct_solve_batched(self, J, sigma_y2, c_t, residual):
+        # J: (B, M, D), residual: (B, M)
+        B, M, D = J.shape
+        eye = torch.eye(M, device=J.device, dtype=J.dtype).unsqueeze(0).expand(B, M, M)
+        K = sigma_y2 * eye + c_t * torch.bmm(J, J.transpose(1, 2))
+        return torch.linalg.solve(K, residual.unsqueeze(-1)).squeeze(-1)
+
+    def _conjugate_gradient_batched(self, J, sigma_y2, c_t, residual, max_iters=5):
+        # Solves: (sigma_y^2 I + c_t J J^T) v = residual
+        B, M, D = J.shape
+
+        def matvec(v):
+            Jt_v = torch.bmm(J.transpose(1, 2), v.unsqueeze(-1)).squeeze(-1)
+            JJt_v = torch.bmm(J, Jt_v.unsqueeze(-1)).squeeze(-1)
+            return sigma_y2 * v + c_t * JJt_v
+
+        v = torch.zeros_like(residual)
+        r = residual - matvec(v)
+        p = r.clone()
+        rsold = (r * r).sum(dim=1, keepdim=True)
+
+        for _ in range(max_iters):
+            Ap = matvec(p)
+            alpha = rsold / (p * Ap).sum(dim=1, keepdim=True).clamp_min(1e-12)
+            v = v + alpha * p
+            r = r - alpha * Ap
+            rsnew = (r * r).sum(dim=1, keepdim=True)
+            p = r + (rsnew / rsold.clamp_min(1e-12)) * p
+            rsold = rsnew
+
+        return v
 
     def train_train_flow_model_on_latents_batch(self, x1):
         x1 = x1.to(self.device)
@@ -341,6 +370,93 @@ class ImageFlow(pl.LightningModule):
         for param in self.flow_model.parameters():
             param.requires_grad = False
         self._flow_model_ready = True
+
+    @torch.no_grad()
+    def _diem_sampling_batch(
+            self,
+            gt_obs,
+            A_batch,
+            B,
+            cg_iters=5,
+            c_t_max=10.0,
+            correction_max_norm=3.0,
+            use_direct_solve_below_M=16,
+    ):
+        x = torch.randn(
+            B, self.channels, self.img_size, self.img_size,
+            device=self.device
+        )
+
+        # Your A_batch is (B, D, M), DiEM expects (B, M, D)
+        A = A_batch.transpose(1, 2)
+        y = gt_obs
+
+        _, M, D = A.shape
+        sigma_y2 = float(self.noise_std) ** 2
+        eps_floor = 1e-5
+
+        indices = list(range(self.diffusion.num_timesteps))[::-1]
+        use_direct = M < use_direct_solve_below_M
+
+        def model_fn(x_in, t_in):
+            return self.flow_model(x_in, t_in.float().view(-1, 1))
+
+        for i in indices:
+            t = torch.full((B,), i, device=self.device, dtype=torch.long)
+
+            out = self.diffusion.p_mean_variance(
+                model_fn,
+                x,
+                t,
+                clip_denoised=True,
+                model_kwargs={},
+            )
+
+            x0_hat = out["pred_xstart"]
+            x0_flat = x0_hat.view(B, -1)
+
+            abar_t = torch.as_tensor(
+                self.diffusion.alphas_cumprod[i],
+                device=self.device,
+                dtype=x.dtype,
+            ).clamp(min=eps_floor)
+
+            c_t = ((1.0 - abar_t) / abar_t).item()
+            c_t = min(c_t, c_t_max)
+
+            # Linear measurement model: y = A x
+            Ax = torch.bmm(A, x0_flat.unsqueeze(-1)).squeeze(-1)
+            residual = y - Ax
+
+            if use_direct:
+                v = self._direct_solve_batched(A, sigma_y2, c_t, residual)
+            else:
+                v = self._conjugate_gradient_batched(
+                    A, sigma_y2, c_t, residual, max_iters=cg_iters
+                )
+
+            JtV = torch.bmm(A.transpose(1, 2), v.unsqueeze(-1)).squeeze(-1)
+            delta = c_t * JtV
+
+            if correction_max_norm is not None:
+                norm = delta.pow(2).sum(dim=1, keepdim=True).sqrt().clamp_min(eps_floor)
+                scale = (correction_max_norm / norm).clamp(max=1.0)
+                delta = delta * scale
+
+            x0_corrected = (x0_flat + delta).view_as(x)
+
+            # Use your diffusion library to get q(x_{t-1} | x_t, corrected x0)
+            mean, _, log_var = self.diffusion.q_posterior_mean_variance(
+                x_start=x0_corrected,
+                x_t=x,
+                t=t,
+            )
+
+            noise = torch.randn_like(x)
+            nonzero_mask = (t != 0).float().view(B, 1, 1, 1)
+            x = mean + nonzero_mask * torch.exp(0.5 * log_var) * noise
+
+        return x.detach()
 
     def _guided_sampling_batch(self, gt_obs, A_batch, B):
         self.flow_model.eval()
@@ -415,10 +531,15 @@ class ImageFlow(pl.LightningModule):
                 # 2. Reverse step + normalized guidance correction
                 x = x_next.detach() - scale * grad
 
+        elif self.model_type == 'diem':
+            x = self._diem_sampling_batch(gt_obs, A_batch, B)
+        else:
+            raise ValueError(f"Unknown model_type: {self.model_type}")
+
         self.flow_model.train()
         return x
 
-    def training_step_consistant_latents(self, batch, batch_idx):
+    def training_step_persistent_latents(self, batch, batch_idx):
         (indices,) = batch
         B = indices.shape[0]
         gt_obs = self.gt_observations[indices]
@@ -461,7 +582,7 @@ class ImageFlow(pl.LightningModule):
 
         return combined_loss
 
-    def training_step_non_consistent(self, batch, batch_idx):
+    def training_step_non_persistent(self, batch, batch_idx):
         (indices,) = batch
         B = indices.shape[0]
         gt_obs = self.gt_observations[indices]
@@ -502,9 +623,9 @@ class ImageFlow(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         if self.use_persistent_latents:
-            loss = self.training_step_consistant_latents(batch, batch_idx)
+            loss = self.training_step_persistent_latents(batch, batch_idx)
         else:
-            loss = self.training_step_non_consistent(batch, batch_idx)
+            loss = self.training_step_non_persistent(batch, batch_idx)
         return loss
 
     def on_train_epoch_end(self):
