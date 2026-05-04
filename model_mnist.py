@@ -377,7 +377,7 @@ class ImageFlow(pl.LightningModule):
             gt_obs,
             A_batch,
             B,
-            cg_iters=5,
+            cg_iters=100,
             c_t_max=10.0,
             correction_max_norm=3.0,
             use_direct_solve_below_M=16,
